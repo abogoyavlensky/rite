@@ -193,18 +193,18 @@ Note on lgx test sources: unit tests for ported modules start from the correspon
 - Create: `src/rite/cli.lg`
 - Test: `test/rite/cli_test.lg`
 
-- [ ] **Step 1: Write tests**
+- [x] **Step 1: Write tests**
   Start from `../lgx/test/lgx/cli_test.lg`. Keep `user-args` cases (dev `.lg`-script prefix vs bundle prefix). `parse-leading-flags` now handles only `--verbose` (repeatable, order-independent, stops at first non-flag): returns `{:verbose? bool :args [...]}`. Drop `--with`/nrepl/new parser tests.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
   Run: `lgx test test/rite/cli_test.lg` — Expected: FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
   Trim `../lgx/lgx/cli.lg`: keep `user-args` as-is; simplify `parse-leading-flags` to `--verbose` only.
 
-- [ ] **Step 4: Run tests** — `lgx test test/rite/cli_test.lg` — Expected: PASS.
+- [x] **Step 4: Run tests** — `lgx test test/rite/cli_test.lg` — Expected: PASS.
 
-- [ ] **Step 5: Commit** — `git commit -m "feat: add CLI argv parsing"`
+- [x] **Step 5: Commit** — `git commit -m "feat: add CLI argv parsing"`
 
 ### Task 3: Args + vars binding and substitution
 

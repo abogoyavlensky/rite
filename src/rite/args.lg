@@ -1,0 +1,174 @@
+(ns rite.args
+  (:require [string :as str]))
+
+;; --------------------------------------------------------------------------
+;; Task positional args + shared vars
+;;
+;; Pure helpers for a task's :args declarations and the project's :vars: bind
+;; CLI values against the declared positional args, render the usage line,
+;; substitute :arg/<name> and :var/<name> placeholders into step vectors, and
+;; expand {{<name>}} templates inside step strings. All bound values are
+;; strings — a provided :int value keeps its original CLI string, a filled
+;; :default is stringified, and :vars values are stringified. Declarations
+;; themselves are validated in rite.config; here a malformed declaration is a
+;; programmer error.
+;; --------------------------------------------------------------------------
+
+(defn- arg-key [decl]
+  (keyword "arg" (name (:name decl))))
+
+(defn- value-error
+  "Validate one provided CLI string against decl's type (:string when
+   absent). Returns an error message string, or nil when the value conforms."
+  [decl value]
+  (let [t (or (:type decl) :string)]
+    (cond
+      (= t :int)
+      (when (nil? (parse-long value))
+        (str "argument <" (name (:name decl)) "> must be an integer, got "
+             (pr-str value)))
+
+      ;; [:enum v1 v2 ...]
+      (vector? t)
+      (let [allowed (vec (rest t))]
+        (when-not (some #(= % value) allowed)
+          (str "argument <" (name (:name decl)) "> must be one of: "
+               (str/join ", " allowed) ", got " (pr-str value))))
+
+      :else nil)))
+
+(defn bind-args
+  "Bind `cli-args` (strings) positionally against `decls`. Returns
+   {:bindings {:arg/<name> <string> ...}} or {:errors [msg ...]} with every
+   error collected. Args without :default are required; unfilled trailing
+   args bind (str default)."
+  [decls cli-args]
+  (let [decls (vec decls)
+        cli-args (vec cli-args)]
+    (if (> (count cli-args) (count decls))
+      {:errors [(if (empty? decls)
+                  (str "task takes no arguments (got " (count cli-args) ")")
+                  (str "too many arguments (expected at most " (count decls)
+                       ", got " (count cli-args) ")"))]}
+      (loop [i 0
+             bindings {}
+             errors []]
+        (if (>= i (count decls))
+          (if (seq errors)
+            {:errors errors}
+            {:bindings bindings})
+          (let [decl (nth decls i)]
+            (cond
+              (< i (count cli-args))
+              (let [v (nth cli-args i)
+                    e (value-error decl v)]
+                (if e
+                  (recur (inc i) bindings (conj errors e))
+                  (recur (inc i) (assoc bindings (arg-key decl) v) errors)))
+
+              (contains? decl :default)
+              (recur (inc i)
+                     (assoc bindings (arg-key decl) (str (:default decl)))
+                     errors)
+
+              :else
+              (recur (inc i) bindings
+                     (conj errors (str "missing required argument <"
+                                       (name (:name decl)) ">"))))))))))
+
+(defn var-bindings
+  "Convert a :vars map (unqualified keyword → string/number) into a bindings
+   map keyed by :var/<name> with every value stringified. nil/empty vars give
+   an empty map."
+  [vars]
+  (reduce (fn [acc [k v]]
+            (assoc acc (keyword "var" (name k)) (str v)))
+          {}
+          (or vars {})))
+
+(defn task-bindings
+  "Combine project :vars and a task's bound :args into one bindings map:
+   :var/<name> entries under :arg/<name> entries. The namespaces never
+   collide as keys; {{name}} shadowing (args over vars) is handled in expand."
+  [vars arg-bindings]
+  (merge (var-bindings vars) arg-bindings))
+
+(defn shell-quote
+  "Wrap `s` in single quotes with embedded single quotes escaped as '\\''.
+   Always wraps, even when unnecessary — the value arrives at the shell as
+   exactly one uninterpreted word."
+  [s]
+  (str "'" (str/replace s "'" "'\\''") "'"))
+
+(defn- placeholder? [item]
+  (and (keyword? item)
+       (contains? #{"arg" "var"} (namespace item))))
+
+(defn substitute
+  "Replace each :arg/<name> or :var/<name> keyword in step vector `v` with its
+   bound value from `bindings`, shell-quoted when `quote?` is true. String
+   items pass through verbatim. An unbound placeholder is a programmer error
+   (config validation rejects it) and throws ex-info."
+  [v bindings quote?]
+  (mapv (fn [item]
+          (if (placeholder? item)
+            (if (contains? bindings item)
+              (let [value (get bindings item)]
+                (if quote? (shell-quote value) value))
+              (throw (ex-info (str "unbound placeholder " item)
+                              {:placeholder item})))
+            item))
+        v))
+
+(defn expand
+  "Replace each {{<name>}} token in `s` whose name matches a bound value with
+   that value, spliced in raw — no quoting is added, the task author quotes
+   the surrounding text when needed. Lookup prefers :arg/<name>, then
+   :var/<name> (args shadow vars). Tokens that don't name a bound value pass
+   through untouched (including empty or namespaced names), as does an
+   unclosed {{. Substituted values are never re-scanned."
+  [s bindings]
+  (loop [idx 0
+         out ""]
+    (let [open (str/index-of s "{{" idx)]
+      (if (nil? open)
+        (str out (subs s idx))
+        (let [close (str/index-of s "}}" (+ open 2))]
+          (if (nil? close)
+            (str out (subs s idx))
+            (let [n (subs s (+ open 2) close)
+                  valid-name? (and (not= n "") (nil? (str/index-of n "/")))
+                  arg-k (when valid-name? (keyword "arg" n))
+                  var-k (when valid-name? (keyword "var" n))
+                  k (cond
+                      (and arg-k (contains? bindings arg-k)) arg-k
+                      (and var-k (contains? bindings var-k)) var-k
+                      :else nil)]
+              (if k
+                (recur (+ close 2)
+                       (str out (subs s idx open) (get bindings k)))
+                ;; Not a bound token: emit through the opening braces and
+                ;; rescan right after them, so "{{a{{env}}" still expands
+                ;; the inner token.
+                (recur (+ open 2)
+                       (str out (subs s idx (+ open 2))))))))))))
+
+(defn signature
+  "Render decls as a space-joined signature: required args as <name>,
+   defaulted args as [name]. Empty string for no decls."
+  [decls]
+  (str/join " "
+            (map (fn [d]
+                   (let [n (name (:name d))]
+                     (if (contains? d :default)
+                       (str "[" n "]")
+                       (str "<" n ">"))))
+                 decls)))
+
+(defn usage-line
+  "Render `usage: rite <task> <req> [opt]` from decls. With no decls just
+   `usage: rite <task>`."
+  [task-name decls]
+  (let [sig (signature decls)]
+    (str "usage: rite " task-name
+         (if (str/blank? sig) "" (str " " sig)))))

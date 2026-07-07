@@ -1,0 +1,249 @@
+;; Unit tests for rite.args — pure task-arg + var binding and substitution.
+;; Run with: lgx test  (from project root)
+
+(ns rite.args-test
+  (:require [clojure.test :refer [deftest is]]
+            [rite.args :as args]))
+
+;; ---------------------------------------------------------------------------
+;; bind-args
+;; ---------------------------------------------------------------------------
+
+(deftest bind-no-decls-no-args
+  (is (= {:bindings {}} (args/bind-args [] []))))
+
+(deftest bind-no-decls-with-args-errors
+  (is (= {:errors ["task takes no arguments (got 1)"]}
+         (args/bind-args [] ["x"]))))
+
+(deftest bind-required-string
+  (is (= {:bindings {:arg/env "prod"}}
+         (args/bind-args [{:name :env
+                           :type :string}] ["prod"]))))
+
+(deftest bind-type-defaults-to-string
+  (is (= {:bindings {:arg/env "prod"}}
+         (args/bind-args [{:name :env}] ["prod"]))))
+
+(deftest bind-missing-required-one-error-per-arg
+  (is (= {:errors ["missing required argument <env>"
+                   "missing required argument <version>"]}
+         (args/bind-args [{:name :env} {:name :version}] []))))
+
+(deftest bind-surplus-errors
+  (is (= {:errors ["too many arguments (expected at most 2, got 3)"]}
+         (args/bind-args [{:name :env} {:name :version
+                                        :default "latest"}]
+                         ["a" "b" "c"]))))
+
+(deftest bind-int-keeps-original-string
+  (is (= {:bindings {:arg/port "8080"}}
+         (args/bind-args [{:name :port
+                           :type :int}] ["8080"]))))
+
+(deftest bind-int-invalid-errors
+  (is (= {:errors ["argument <port> must be an integer, got \"abc\""]}
+         (args/bind-args [{:name :port
+                           :type :int}] ["abc"]))))
+
+(deftest bind-enum-valid
+  (is (= {:bindings {:arg/env "prod"}}
+         (args/bind-args [{:name :env
+                           :type [:enum "prod" "staging"]}]
+                         ["prod"]))))
+
+(deftest bind-enum-invalid-errors
+  (is (= {:errors ["argument <env> must be one of: prod, staging, got \"qa\""]}
+         (args/bind-args [{:name :env
+                           :type [:enum "prod" "staging"]}]
+                         ["qa"]))))
+
+(deftest bind-default-fills-omitted-trailing
+  (is (= {:bindings {:arg/env "prod"
+                     :arg/version "latest"}}
+         (args/bind-args [{:name :env}
+                          {:name :version
+                           :default "latest"}]
+                         ["prod"]))))
+
+(deftest bind-int-default-stringified
+  (is (= {:bindings {:arg/port "8080"}}
+         (args/bind-args [{:name :port
+                           :type :int
+                           :default 8080}] []))))
+
+(deftest bind-provided-overrides-default
+  (is (= {:bindings {:arg/version "1.2"}}
+         (args/bind-args [{:name :version
+                           :default "latest"}] ["1.2"]))))
+
+(deftest bind-collects-multiple-errors
+  ;; A missing required arg and nothing else: errors collect, no bindings.
+  (is (= {:errors ["argument <env> must be one of: prod, staging, got \"qa\""
+                   "missing required argument <port>"]}
+         (args/bind-args [{:name :env
+                           :type [:enum "prod" "staging"]}
+                          {:name :port
+                           :type :int}]
+                         ["qa"]))))
+
+;; ---------------------------------------------------------------------------
+;; var-bindings / task-bindings
+;; ---------------------------------------------------------------------------
+
+(deftest var-bindings-keys-to-var-namespace
+  (is (= {:var/version "1.2.0"} (args/var-bindings {:version "1.2.0"}))))
+
+(deftest var-bindings-stringifies-values
+  (is (= {:var/retries "3"} (args/var-bindings {:retries 3}))))
+
+(deftest var-bindings-empty
+  (is (= {} (args/var-bindings {})))
+  (is (= {} (args/var-bindings nil))))
+
+(deftest task-bindings-merges-vars-and-args
+  (is (= {:var/version "1.2.0"
+          :arg/env "prod"}
+         (args/task-bindings {:version "1.2.0"} {:arg/env "prod"}))))
+
+;; ---------------------------------------------------------------------------
+;; shell-quote
+;; ---------------------------------------------------------------------------
+
+(deftest quote-plain-value
+  (is (= "'abc'" (args/shell-quote "abc"))))
+
+(deftest quote-embedded-single-quote
+  (is (= "'a'\\''b'" (args/shell-quote "a'b"))))
+
+(deftest quote-keeps-hostile-value-one-unit
+  (is (= "'a b; echo pwned'" (args/shell-quote "a b; echo pwned"))))
+
+;; ---------------------------------------------------------------------------
+;; substitute — :arg/* and :var/*
+;; ---------------------------------------------------------------------------
+
+(deftest substitute-strings-pass-through
+  (is (= ["echo" "hi"]
+         (args/substitute ["echo" "hi"] {} false))))
+
+(deftest substitute-verbatim
+  (is (= ["notify.lg" "prod"]
+         (args/substitute ["notify.lg" :arg/env] {:arg/env "prod"} false))))
+
+(deftest substitute-quoted
+  (is (= ["./deploy.sh" "'prod'" "'latest'"]
+         (args/substitute ["./deploy.sh" :arg/env :arg/version]
+                          {:arg/env "prod"
+                           :arg/version "latest"}
+                          true))))
+
+(deftest substitute-var-verbatim
+  (is (= ["echo" "1.2.0"]
+         (args/substitute ["echo" :var/version] {:var/version "1.2.0"} false))))
+
+(deftest substitute-var-quoted
+  (is (= ["echo" "'1 2 0'"]
+         (args/substitute ["echo" :var/version] {:var/version "1 2 0"} true))))
+
+(deftest substitute-keeps-order-in-mixed-vector
+  (is (= ["a" "x" "b" "y"]
+         (args/substitute ["a" :arg/one "b" :var/two]
+                          {:arg/one "x"
+                           :var/two "y"}
+                          false))))
+
+(deftest substitute-unbound-arg-throws
+  (is (= :threw
+         (try (args/substitute [:arg/missing] {} false)
+              :no-throw
+              (catch e :threw)))))
+
+(deftest substitute-unbound-var-throws
+  (is (= :threw
+         (try (args/substitute [:var/missing] {} false)
+              :no-throw
+              (catch e :threw)))))
+
+;; ---------------------------------------------------------------------------
+;; expand — args shadow vars
+;; ---------------------------------------------------------------------------
+
+(deftest expand-basic
+  (is (= "v1.2" (args/expand "v{{version}}" {:arg/version "1.2"}))))
+
+(deftest expand-multiple-tokens
+  (is (= "prod-1.2"
+         (args/expand "{{env}}-{{version}}" {:arg/env "prod"
+                                             :arg/version "1.2"}))))
+
+(deftest expand-whole-string-is-one-token
+  (is (= "prod" (args/expand "{{env}}" {:arg/env "prod"}))))
+
+(deftest expand-from-var
+  (is (= "v1.2.0" (args/expand "v{{version}}" {:var/version "1.2.0"}))))
+
+(deftest expand-arg-shadows-var
+  ;; When both an arg and a var carry the same name, the arg wins.
+  (is (= "arg-wins"
+         (args/expand "{{env}}" {:arg/env "arg-wins"
+                                 :var/env "var-loses"}))))
+
+(deftest expand-falls-back-to-var
+  ;; No matching arg, so the var value is used.
+  (is (= "var-value"
+         (args/expand "{{env}}" {:arg/other "x"
+                                 :var/env "var-value"}))))
+
+(deftest expand-unknown-name-passes-through
+  (is (= "v{{verison}}" (args/expand "v{{verison}}" {:arg/version "1.2"}))))
+
+(deftest expand-empty-bindings-leaves-tokens
+  (is (= "v{{version}}" (args/expand "v{{version}}" {}))))
+
+(deftest expand-unclosed-token-passes-through
+  (is (= "v{{version" (args/expand "v{{version" {:arg/version "1.2"}))))
+
+(deftest expand-empty-name-passes-through
+  (is (= "x{{}}y" (args/expand "x{{}}y" {:arg/version "1.2"}))))
+
+(deftest expand-slash-name-passes-through
+  (is (= "{{a/b}}" (args/expand "{{a/b}}" {:arg/version "1.2"}))))
+
+(deftest expand-values-are-inert
+  ;; A bound value containing another token is never re-expanded.
+  (is (= "{{b}}" (args/expand "{{a}}" {:arg/a "{{b}}"
+                                       :arg/b "x"}))))
+
+(deftest expand-raw-splice-adds-no-quoting
+  (is (= "tag 1.2; echo hi"
+         (args/expand "tag {{v}}" {:arg/v "1.2; echo hi"}))))
+
+(deftest expand-stray-braces-before-real-token
+  (is (= "{{aprod" (args/expand "{{a{{env}}" {:arg/env "prod"}))))
+
+(deftest expand-no-tokens-returns-string-as-is
+  (is (= "plain text" (args/expand "plain text" {:arg/env "prod"}))))
+
+;; ---------------------------------------------------------------------------
+;; signature / usage-line
+;; ---------------------------------------------------------------------------
+
+(deftest signature-empty-for-no-decls
+  (is (= "" (args/signature []))))
+
+(deftest signature-required-and-optional
+  (is (= "<env> [version]"
+         (args/signature [{:name :env}
+                          {:name :version
+                           :default "latest"}]))))
+
+(deftest usage-no-decls
+  (is (= "usage: rite deploy" (args/usage-line "deploy" []))))
+
+(deftest usage-required-and-optional
+  (is (= "usage: rite deploy <env> [version]"
+         (args/usage-line "deploy"
+                          [{:name :env}
+                           {:name :version
+                            :default "latest"}]))))
