@@ -17,6 +17,9 @@
              ;; let-go builtins
              mkdir delete-file file-exists? write! *compiling-aot*]}
   ;; let-go builtin namespace, available without require
-  :unresolved-namespace {:exclude [os]}}
+  :unresolved-namespace {:exclude [os]}
+  ;; Vars referenced only inside catch bodies, which kondo skips (syntax off).
+  :unused-private-var
+  {:exclude [rite.config/first-line]}}
  ;; main.lg is the entry script; its ns is rite.main by design.
  :config-in-ns {rite.main {:linters {:namespace-name-mismatch {:level :off}}}}}

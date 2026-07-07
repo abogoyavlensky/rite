@@ -1,0 +1,527 @@
+(ns rite.config
+  (:require [edn]
+            [rite.path :as path]
+            [rite.spec :as spec]
+            [string :as str]))
+
+(def config-name "rite.edn")
+
+;; Deps are let-go libraries: they declare their own deps the lgx way, in an
+;; lgx.edn. rite reads that (never rite.edn) when resolving a dep's transitive
+;; deps.
+(def ^:private dep-config-name "lgx.edn")
+
+(defn find-project
+  "Walk up from CWD looking for rite.edn. Returns the project root or nil."
+  []
+  (loop [dir (os/cwd)]
+    (cond
+      (nil? dir) nil
+      (file-exists? (path/join dir config-name)) dir
+      :else (recur (path/parent dir)))))
+
+(defn find-project!
+  "Like find-project, but exits with an error if no rite.edn is found."
+  []
+  (or (find-project)
+      (do (println "error: no" config-name "found in this or any parent directory")
+          (os/exit 1))))
+
+(def ^:private git-keys #{:git/url :git/sha :git/tag})
+
+;; Built-in CLI commands that a project task may not shadow. completion and
+;; __complete are reserved for a future shell-completion command.
+(def reserved-task-names
+  #{"help" "version" "tasks" "completion" "__complete"})
+
+;; ---------------------------------------------------------------------------
+;; rite.edn format as one schema value (see rite.spec for the schema language)
+;; ---------------------------------------------------------------------------
+
+(defn- rel-path-errors
+  "Relative-path rule shared by :paths entries and :deps/root. rite.edn path
+   values use forward-slash by convention, matching tools.deps. Returns a
+   vector of error message strings."
+  [v]
+  (cond
+    (not (string? v)) [(str "must be a string, got " (pr-str v))]
+    (str/blank? v) ["must be non-blank"]
+    (str/starts-with? v "/") ["must be relative (no leading /)"]
+    (some #(= ".." %) (str/split v "/")) ["must not contain .. segments"]
+    :else []))
+
+(def ^:private rel-path-schema [:fn rel-path-errors])
+
+(defn- non-blank-string-errors [v]
+  (cond
+    (not (string? v)) [(str "must be a string, got " (pr-str v))]
+    (str/blank? v) ["must be non-blank"]
+    :else []))
+
+(defn- at-key
+  "Anchor plain message strings at sub-path [k]."
+  [k msgs]
+  (mapv (fn [m] {:path [k]
+                 :msg m}) msgs))
+
+(defn- coord-errors
+  "Coord rule: :local/root or :git/url + (:git/sha | :git/tag), optional
+   :deps/root. Coord maps are open — unknown keys are tools.deps
+   forward-compat, not errors."
+  [c]
+  (let [has-local? (contains? c :local/root)
+        has-git? (some #(contains? c %) git-keys)
+        deps-root (if (contains? c :deps/root)
+                    (at-key :deps/root (rel-path-errors (:deps/root c)))
+                    [])]
+    (cond
+      (and has-local? has-git?)
+      "cannot mix :local/root with :git/* keys"
+
+      has-local?
+      (vec (concat (at-key :local/root
+                           (non-blank-string-errors (:local/root c)))
+                   deps-root))
+
+      :else
+      (vec (concat
+             (when-not (string? (:git/url c)) ["missing :git/url"])
+             (when-not (or (string? (:git/sha c)) (string? (:git/tag c)))
+               ["must specify :git/sha or :git/tag"])
+             deps-root)))))
+
+(def ^:private coord-schema [:and :map [:fn coord-errors]])
+
+(def ^:private deps-schema [:map-of :symbol coord-schema])
+
+(defn- arg-placeholder?
+  "True for an :arg/<name> placeholder keyword in a step vector."
+  [x]
+  (and (keyword? x) (= "arg" (namespace x))))
+
+(defn- var-placeholder?
+  "True for a :var/<name> placeholder keyword in a step vector."
+  [x]
+  (and (keyword? x) (= "var" (namespace x))))
+
+(defn- step-placeholder? [x]
+  (or (arg-placeholder? x) (var-placeholder? x)))
+
+(defn- action-value-errors
+  "A step's :sh/:run value: a non-blank string or a non-empty vector whose
+   items are strings or :arg/<name>/:var/<name> placeholder keywords. Whether
+   a placeholder names a declared arg or defined var is the cross-check's job."
+  [v]
+  (cond
+    (string? v) (if (str/blank? v) ["must be a non-blank string"] [])
+
+    (vector? v)
+    (if (empty? v)
+      ["must be a non-empty vector of strings"]
+      (loop [i 0
+             acc []]
+        (if (>= i (count v))
+          acc
+          (recur (inc i)
+                 (if (or (string? (nth v i)) (step-placeholder? (nth v i)))
+                   acc
+                   (conj acc {:path [i]
+                              :msg (str "must be a string, :arg/<name>, or "
+                                        ":var/<name> placeholder, got "
+                                        (pr-str (nth v i)))}))))))
+
+    :else
+    [(str "must be a string or vector of strings, got " (pr-str v))]))
+
+(defn- exactly-one-action-errors [step]
+  (when (not= 1 (count (filter #(contains? step %) [:sh :run])))
+    "must contain exactly one of :sh, :run"))
+
+(def ^:private step-schema
+  [:and
+   [:map {:closed true}
+    [:sh {:optional true} [:fn action-value-errors]]
+    [:run {:optional true} [:fn action-value-errors]]]
+   [:fn exactly-one-action-errors]])
+
+(defn- do-errors
+  "A task's :do — a single step map or a non-empty vector of steps. Recurses
+   into the engine; the returned relative paths get prefixed by the caller."
+  [v]
+  (cond
+    (map? v) (spec/validate step-schema v)
+    (vector? v) (spec/validate [:vector {:min 1} step-schema] v)
+    :else (str "must be a step map or non-empty vector of steps, got "
+               (pr-str v))))
+
+(defn- arg-name-errors
+  "An arg's :name — an unqualified keyword; :arg/<name> can't encode a
+   namespace."
+  [v]
+  (cond
+    (not (keyword? v)) [(str "must be a keyword, got " (pr-str v))]
+    (namespace v) [(str "must be an unqualified keyword, got " v)]
+    :else []))
+
+(defn- arg-type-errors
+  "An arg's :type — :int, :string, or [:enum v1 v2 ...] with at least two
+   distinct non-blank string values (CLI values arrive as strings)."
+  [t]
+  (cond
+    (or (= t :int) (= t :string))
+    []
+
+    (and (vector? t) (= :enum (first t)))
+    (let [values (vec (rest t))]
+      (cond
+        (< (count values) 2) ["must list at least 2 enum values"]
+        (some #(or (not (string? %)) (str/blank? %)) values)
+        ["enum values must be non-blank strings"]
+        (not= (count values) (count (set values)))
+        ["enum values must be distinct"]
+        :else []))
+
+    :else
+    [(str "must be :int, :string, or [:enum ...], got " (pr-str t))]))
+
+(defn- arg-default-errors
+  "Arg-map cross-key rule: :default must match the (defaulted) :type. Runs
+   only after the structural map check passed, so :type is well-formed."
+  [a]
+  (when (contains? a :default)
+    (let [t (or (:type a) :string)
+          d (:default a)]
+      (cond
+        (= t :string)
+        (when-not (string? d)
+          {:path [:default]
+           :msg (str "must be a string (type :string), got " (pr-str d))})
+
+        (= t :int)
+        (when-not (integer? d)
+          {:path [:default]
+           :msg (str "must be an integer (type :int), got " (pr-str d))})
+
+        :else
+        (let [allowed (vec (rest t))]
+          (when-not (some #(= % d) allowed)
+            {:path [:default]
+             :msg (str "must be one of: " (str/join ", " allowed)
+                       ", got " (pr-str d))}))))))
+
+(def ^:private arg-schema
+  [:and
+   [:map {:closed true}
+    [:name [:fn arg-name-errors]]
+    [:type {:optional true} [:fn arg-type-errors]]
+    [:default {:optional true} :any]]
+   [:fn arg-default-errors]])
+
+(defn- args-vector-errors
+  "Vector-level rules over valid arg maps: unique names, and trailing
+   optionals — once an arg has :default, every later arg must too (CLI
+   values fill positions left to right, so only a trailing arg can be
+   omitted)."
+  [v]
+  (loop [i 0
+         seen #{}
+         seen-default? false
+         acc []]
+    (if (>= i (count v))
+      acc
+      (let [a (nth v i)
+            n (:name a)
+            has-default? (contains? a :default)
+            acc (if (contains? seen n)
+                  (conj acc {:path [i :name]
+                             :msg (str "duplicate arg name " n)})
+                  acc)
+            acc (if (and seen-default? (not has-default?))
+                  (conj acc {:path [i]
+                             :msg (str "required arg " n
+                                       " cannot follow an arg with :default")})
+                  acc)]
+        (recur (inc i) (conj seen n) (or seen-default? has-default?) acc)))))
+
+(def ^:private args-schema
+  [:and [:vector {:min 1} arg-schema] [:fn args-vector-errors]])
+
+(defn- depends-item-errors
+  "A dep entry's tail item: a string (with {{...}} expansion) or an
+   :arg/<name>/:var/<name> forwarding keyword."
+  [item]
+  (when-not (or (string? item) (step-placeholder? item))
+    (str "must be a string, :arg/<name>, or :var/<name>, got " (pr-str item))))
+
+(defn- depends-entry-errors
+  "One :depends entry: a task symbol, or a non-empty vector whose head is a
+   task symbol and whose tail items are strings or forwarding placeholders."
+  [entry]
+  (cond
+    (symbol? entry) []
+
+    (vector? entry)
+    (cond
+      (empty? entry) ["must be a non-empty vector [task item...]"]
+
+      (not (symbol? (first entry)))
+      [{:path [0]
+        :msg (str "first element must be a task symbol, got "
+                  (pr-str (first entry)))}]
+
+      :else
+      (loop [i 1
+             acc []]
+        (if (>= i (count entry))
+          acc
+          (let [e (depends-item-errors (nth entry i))]
+            (recur (inc i)
+                   (if e (conj acc {:path [i]
+                                    :msg e}) acc))))))
+
+    :else
+    [(str "must be a task symbol or [task item...] vector, got "
+          (pr-str entry))]))
+
+(def ^:private depends-schema
+  [:vector {:min 1} [:fn depends-entry-errors]])
+
+(defn- task-do-or-depends-errors
+  "Task-level cross-key rule: a task must carry :do, :depends, or both — an
+   empty task does nothing and is almost certainly a mistake."
+  [task]
+  (when-not (or (contains? task :do) (contains? task :depends))
+    "must define :do or :depends"))
+
+(def ^:private task-schema
+  [:and
+   [:map {:closed true}
+    [:doc {:optional true} :string]
+    [:args {:optional true} args-schema]
+    [:do {:optional true} [:fn do-errors]]
+    [:depends {:optional true} depends-schema]
+    [:deps {:optional true} deps-schema]
+    [:paths {:optional true} [:vector rel-path-schema]]]
+   [:fn task-do-or-depends-errors]])
+
+(defn- task-name-errors [k]
+  (cond
+    ;; (subs (str k) 1) rather than (name k): a namespaced keyword like
+    ;; :foo/bar must migrate to foo/bar, not bar.
+    (keyword? k)
+    (str "task names are symbols; write " (subs (str k) 1) " instead of " k)
+
+    (not (symbol? k))
+    (str "must be a symbol, got " (pr-str k))
+
+    ;; (str k) rather than (name k): only a bare name can shadow a built-in —
+    ;; a namespaced foo/tasks dispatches as "foo/tasks", never as "tasks".
+    (contains? reserved-task-names (str k))
+    (str "conflicts with built-in command \"" k "\"")))
+
+(defn- var-name-errors
+  "A :vars key — an unqualified keyword; :var/<name> can't encode a namespace."
+  [k]
+  (cond
+    (not (keyword? k)) [(str "must be a keyword, got " (pr-str k))]
+    (namespace k) [(str "must be an unqualified keyword, got " k)]
+    :else []))
+
+(defn- var-value-errors
+  "A :vars value — a string or number (numbers are stringified in normalize)."
+  [v]
+  (if (or (string? v) (number? v))
+    []
+    [(str "must be a string or number, got " (pr-str v))]))
+
+(def ^:private vars-schema
+  [:map-of [:fn var-name-errors] [:fn var-value-errors]])
+
+;; --- placeholder cross-check (arg + var), run over the whole config so the
+;; --- var check can see the root :vars.
+
+(defn- step-ref-errors
+  "Errors for one valid step: every :arg/* must name a declared arg, every
+   :var/* a defined var. Paths are relative to the step (e.g. [:sh 1])."
+  [declared arg-label defined-vars var-label step]
+  (let [k (if (contains? step :sh) :sh :run)
+        v (get step k)]
+    (if-not (vector? v)
+      []
+      (loop [j 0
+             acc []]
+        (if (>= j (count v))
+          acc
+          (let [item (nth v j)]
+            (recur (inc j)
+                   (cond
+                     (and (arg-placeholder? item)
+                          (not (contains? declared item)))
+                     (conj acc {:path [k j]
+                                :msg (if (nil? arg-label)
+                                       (str "placeholder " item
+                                            " used but no :args declared")
+                                       (str "unknown placeholder " item
+                                            " (declared: " arg-label ")"))})
+
+                     (and (var-placeholder? item)
+                          (not (contains? defined-vars item)))
+                     (conj acc {:path [k j]
+                                :msg (if (nil? var-label)
+                                       (str "placeholder " item
+                                            " used but no :vars defined")
+                                       (str "unknown placeholder " item
+                                            " (defined: " var-label ")"))})
+
+                     :else acc))))))))
+
+(defn- task-ref-errors
+  "Walk one task's :do — a single step map or a vector of steps (validation
+   runs before normalize-config) — prefixing step-ref errors with the task's
+   config path."
+  [task-name task defined-vars var-label]
+  (let [decls (:args task)
+        declared (set (mapv #(keyword "arg" (name (:name %))) (or decls [])))
+        arg-label (when decls (str/join ", " (mapv (comp str :name) decls)))
+        d (:do task)]
+    (cond
+      (nil? d) []
+
+      (map? d)
+      (mapv (fn [e] {:path (vec (concat [:tasks task-name :do] (:path e)))
+                     :msg (:msg e)})
+            (step-ref-errors declared arg-label defined-vars var-label d))
+
+      :else
+      (vec (mapcat
+             (fn [i]
+               (mapv (fn [e] {:path (vec (concat [:tasks task-name :do i]
+                                                 (:path e)))
+                              :msg (:msg e)})
+                     (step-ref-errors declared arg-label defined-vars var-label
+                                      (nth d i))))
+             (range (count d)))))))
+
+(defn- placeholder-refs-errors
+  "Root-level cross-key rule: every :arg/* placeholder in a task's steps must
+   name one of that task's declared args, and every :var/* must name a defined
+   var. Runs only after the structural schema passed, so shapes hold."
+  [cfg]
+  (let [vars (or (:vars cfg) {})
+        defined-vars (set (map (fn [k] (keyword "var" (name k))) (keys vars)))
+        var-label (when (seq vars) (str/join ", " (map str (keys vars))))]
+    (vec (mapcat (fn [[task-name task]]
+                   (task-ref-errors task-name task defined-vars var-label))
+                 (or (:tasks cfg) {})))))
+
+(def ^:private rite-schema
+  [:and
+   [:map {:closed true}
+    [:vars {:optional true} vars-schema]
+    [:tasks {:optional true}
+     [:map-of [:fn task-name-errors] task-schema]]]
+   [:fn placeholder-refs-errors]])
+
+(defn- normalize-vars
+  "Stringify every :vars value (numbers become their printed form)."
+  [cfg]
+  (if (contains? cfg :vars)
+    (assoc cfg :vars
+           (into {} (map (fn [[k v]] [k (str v)]) (:vars cfg))))
+    cfg))
+
+(defn- normalize-tasks
+  "A task's single-step-map :do becomes a one-element vector."
+  [cfg]
+  (if (contains? cfg :tasks)
+    (assoc cfg :tasks
+           (into {}
+                 (map (fn [[k t]]
+                        [k (if (map? (:do t)) (assoc t :do [(:do t)]) t)])
+                      (:tasks cfg))))
+    cfg))
+
+(defn- normalize-config
+  "Post-validation normalization. Validation never mutates; this never
+   validates."
+  [cfg]
+  (normalize-tasks (normalize-vars cfg)))
+
+(defn- first-line [s]
+  (first (str/split s "\n")))
+
+(defn load-config
+  "Read, validate, and normalize the project's rite.edn. Returns
+   {:cfg <map>} on success or {:errors [{:path [...] :msg ...} ...]}.
+   EDN reader failures are reported as a single error, not thrown."
+  [project]
+  (let [config-path (path/join project config-name)
+        parsed (try
+                 {:value (edn/read-string (slurp config-path))}
+                 (catch e
+                        {:error (first-line (ex-message e))}))]
+    (if (contains? parsed :error)
+      {:errors [{:path []
+                 :msg (str "could not parse rite.edn: " (:error parsed))}]}
+      (let [errors (spec/validate rite-schema (:value parsed))]
+        (if (seq errors)
+          {:errors errors}
+          {:cfg (normalize-config (:value parsed))})))))
+
+(defn- errors-report [label errors]
+  (str "rite: invalid " label " (" (count errors) " error"
+       (if (= 1 (count errors)) "" "s") ")\n\n"
+       (str/join "\n" (map #(str "  " (spec/error->line %)) errors))
+       "\n"))
+
+(defn load-config!
+  "Like load-config, but on errors prints the report to stderr and exits 1."
+  [project]
+  (let [r (load-config project)]
+    (if (:errors r)
+      (do (write! *err* (errors-report "rite.edn" (:errors r)))
+          (os/exit 1))
+      (:cfg r))))
+
+;; Read a dep's lgx.edn leniently: only its :deps coords are validated. A dep's
+;; other keys describe how to build that project, not how to consume it, and a
+;; dep built with a newer lgx may carry keys this version doesn't know. The
+;; open :map (no :closed) encodes exactly that.
+(def ^:private dep-config-schema
+  [:map [:deps {:optional true} deps-schema]])
+
+(defn coords-at
+  "Return [lib coord] pairs from an lgx.edn located in dir, or [] when the file
+   is absent. Unlike the project's own rite.edn, a missing file is not an
+   error: most deps ship no lgx.edn, and only a dep's :deps matters for
+   transitive resolution.
+
+   On invalid content throws ex-info whose message is the rendered error
+   report naming dir, with {:rite/invalid-dep-config dir} in ex-data so the
+   caller can print it and exit without a stack trace."
+  [dir]
+  (let [config-path (path/join dir dep-config-name)]
+    (if-not (file-exists? config-path)
+      []
+      (let [parsed (try
+                     {:value (edn/read-string (slurp config-path))}
+                     (catch e
+                            {:error (first-line (ex-message e))}))
+            errors (if (contains? parsed :error)
+                     [{:path []
+                       :msg (str "could not parse lgx.edn: " (:error parsed))}]
+                     (spec/validate dep-config-schema (:value parsed)))]
+        (if (seq errors)
+          (throw (ex-info (errors-report (str "lgx.edn in " dir) errors)
+                          {:rite/invalid-dep-config dir}))
+          (vec (or (:deps (:value parsed)) [])))))))
+
+(defn tasks
+  "Return the :tasks map from a loaded cfg map, or {} if absent."
+  [cfg]
+  (or (:tasks cfg) {}))
+
+(defn vars
+  "Return the :vars map from a loaded cfg map, or {} if absent."
+  [cfg]
+  (or (:vars cfg) {}))

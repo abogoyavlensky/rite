@@ -186,6 +186,8 @@ Note on lgx test sources: unit tests for ported modules start from the correspon
   `git commit -m "feat: port path/style/spec/home helpers from lgx"`
 
 > Deviation: Added `.clj-kondo/config.edn` (ported from lgx, adapted for `rite.main`) and a `.gitignore` entry for `.clj-kondo/.cache/`. Needed so `lgx lint`/`check` stay green now that sources use the `os` builtin namespace — the scaffold's `core.lg` didn't. `home_test.lg` restores env vars between cases to avoid cross-test leakage.
+>
+> Review fixup (codex P1): Task 1's deletion of `rite.core` left `main.lg` requiring it, breaking `lgx build`/`run`. Replaced `main.lg` with a compiling placeholder stub (fully rewritten in Task 9) so every intermediate commit builds. Committed separately as `fix: stub main.lg ...`.
 
 ### Task 2: CLI argv parsing
 

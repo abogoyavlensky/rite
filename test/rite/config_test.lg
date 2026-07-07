@@ -1,0 +1,527 @@
+;; Unit tests for rite.config — config loading, schema validation, accessors.
+;; Run with: lgx test  (from project root)
+
+(ns rite.config-test
+  (:require [clojure.test :refer [deftest is]]
+            [rite.config :as config]
+            [string :as str]))
+
+(defn- threw? [f]
+  (try (f) :no-throw (catch e :threw)))
+
+;; Write the given EDN string as a throwaway project's rite.edn and load it.
+(defn- load-edn [edn-str]
+  (let [dir (str "/tmp/rite-load-config-test-" (rand-int 100000000))]
+    (mkdir dir)
+    (spit (str dir "/rite.edn") edn-str)
+    (let [r (config/load-config dir)]
+      (os/sh "rm" "-rf" dir)
+      r)))
+
+;; Same, but from a config value (serialized through pr-str).
+(defn- load-cfg [cfg]
+  (load-edn (pr-str cfg)))
+
+;; ---------------------------------------------------------------------------
+;; load-config: valid configs
+;; ---------------------------------------------------------------------------
+
+(deftest load-accepts-empty
+  (is (= {:cfg {}} (load-cfg {}))))
+
+(deftest load-accepts-vars
+  (let [cfg {:vars {:version "1.2.0"
+                    :env "prod"}}]
+    (is (= {:cfg cfg} (load-cfg cfg)))))
+
+(deftest load-accepts-sh-task
+  (let [cfg {:tasks {'fmt {:doc "Format"
+                           :do [{:sh "cljfmt fix"}]}}}]
+    (is (= {:cfg cfg} (load-cfg cfg)))))
+
+(deftest load-accepts-depends-only-task
+  ;; An aggregate task: :depends with no :do.
+  (let [cfg {:tasks {'fmt {:do [{:sh "echo fmt"}]}
+                     'lint {:do [{:sh "echo lint"}]}
+                     'check {:doc "All checks"
+                             :depends ['fmt 'lint]}}}]
+    (is (= {:cfg cfg} (load-cfg cfg)))))
+
+(deftest load-accepts-task-with-deps-and-paths
+  (let [cfg {:tasks {'notify {:args [{:name :env}]
+                              :deps {'foo/bar {:git/url "https://github.com/foo/bar"
+                                               :git/tag "0.1.0"}}
+                              :paths ["scripts"]
+                              :do [{:run ["scripts/notify.lg" :arg/env]}]}}}]
+    (is (= {:cfg cfg} (load-cfg cfg)))))
+
+(deftest load-accepts-arg-and-var-placeholders
+  (let [cfg {:vars {:version "1.2.0"}
+             :tasks {'deploy {:args [{:name :env
+                                      :type [:enum "prod" "staging"]}]
+                              :do [{:sh ["./deploy.sh" :arg/env]}
+                                   {:sh ["echo" :var/version]}
+                                   {:sh "released {{version}} to {{env}}"}]}}}]
+    (is (= {:cfg cfg} (load-cfg cfg)))))
+
+(deftest load-accepts-namespaced-task-name
+  ;; foo/version is fine: dispatch sees "foo/version", can't shadow built-in.
+  (let [cfg {:tasks {'foo/version {:do [{:sh "echo hi"}]}}}]
+    (is (= {:cfg cfg} (load-cfg cfg)))))
+
+;; ---------------------------------------------------------------------------
+;; load-config: :vars normalization (numbers -> strings)
+;; ---------------------------------------------------------------------------
+
+(deftest load-normalizes-number-var-to-string
+  (let [r (load-cfg {:vars {:retries 3
+                            :ratio 1.5}})]
+    (is (= {:retries "3"
+            :ratio "1.5"} (get-in r [:cfg :vars])))))
+
+;; ---------------------------------------------------------------------------
+;; load-config: top-level errors
+;; ---------------------------------------------------------------------------
+
+(deftest load-rejects-non-map-top-level
+  (is (= {:errors [{:path []
+                    :msg "must be a map, got [:not :a :map]"}]}
+         (load-cfg [:not :a :map]))))
+
+(deftest load-rejects-unknown-top-level-key
+  (is (= {:errors [{:path []
+                    :msg "unknown key :contexts (allowed: :vars, :tasks)"}]}
+         (load-cfg {:contexts {}
+                    :tasks {}}))))
+
+(deftest load-rejects-legacy-paths-key
+  ;; rite has no project-level :paths (task-level only).
+  (is (= {:errors [{:path []
+                    :msg "unknown key :paths (allowed: :vars, :tasks)"}]}
+         (load-cfg {:paths ["src"]}))))
+
+(deftest load-reports-parse-error
+  (let [r (load-edn "{:tasks [")]
+    (is (= 1 (count (:errors r))))
+    (let [e (first (:errors r))]
+      (is (= [] (:path e)))
+      (is (str/starts-with? (:msg e) "could not parse rite.edn: ")))))
+
+;; ---------------------------------------------------------------------------
+;; load-config: :vars errors
+;; ---------------------------------------------------------------------------
+
+(deftest load-rejects-vars-not-a-map
+  (is (= {:errors [{:path [:vars]
+                    :msg "must be a map, got [:not :a :map]"}]}
+         (load-cfg {:vars [:not :a :map]}))))
+
+(deftest load-rejects-non-keyword-var-name
+  (is (= {:errors [{:path [:vars "version"]
+                    :msg "must be a keyword, got \"version\""}]}
+         (load-cfg {:vars {"version" "1"}}))))
+
+(deftest load-rejects-namespaced-var-name
+  (is (= {:errors [{:path [:vars :foo/version]
+                    :msg "must be an unqualified keyword, got :foo/version"}]}
+         (load-cfg {:vars {:foo/version "1"}}))))
+
+(deftest load-rejects-non-scalar-var-value
+  (is (= {:errors [{:path [:vars :version]
+                    :msg "must be a string or number, got [:a]"}]}
+         (load-cfg {:vars {:version [:a]}}))))
+
+;; ---------------------------------------------------------------------------
+;; load-config: coord errors (task-level :deps)
+;; ---------------------------------------------------------------------------
+
+(deftest load-rejects-coord-missing-url
+  (is (= {:errors [{:path [:tasks 'd :deps 'foo/bar]
+                    :msg "missing :git/url"}]}
+         (load-cfg {:tasks {'d {:deps {'foo/bar {:git/sha "abc"}}
+                                :do [{:sh "echo hi"}]}}}))))
+
+(deftest load-rejects-coord-without-sha-or-tag
+  (is (= {:errors [{:path [:tasks 'd :deps 'foo/bar]
+                    :msg "must specify :git/sha or :git/tag"}]}
+         (load-cfg {:tasks {'d {:deps {'foo/bar {:git/url "u"}}
+                                :do [{:sh "echo hi"}]}}}))))
+
+(deftest load-rejects-mixed-local-and-git
+  (is (= {:errors [{:path [:tasks 'd :deps 'my/lib]
+                    :msg "cannot mix :local/root with :git/* keys"}]}
+         (load-cfg {:tasks {'d {:deps {'my/lib {:local/root "../mylib"
+                                                :git/sha "abc"}}
+                                :do [{:sh "echo hi"}]}}}))))
+
+(deftest load-accepts-local-root-coord
+  (let [cfg {:tasks {'d {:deps {'my/lib {:local/root "../mylib"}}
+                         :do [{:sh "echo hi"}]}}}]
+    (is (= {:cfg cfg} (load-cfg cfg)))))
+
+(deftest load-rejects-non-symbol-dep-name
+  (is (= {:errors [{:path [:tasks 'd :deps :foo]
+                    :msg "must be a symbol, got :foo"}]}
+         (load-cfg {:tasks {'d {:deps {:foo {:git/url "u"
+                                             :git/sha "s"}}
+                                :do [{:sh "echo hi"}]}}}))))
+
+;; ---------------------------------------------------------------------------
+;; load-config: :tasks structural
+;; ---------------------------------------------------------------------------
+
+(deftest load-rejects-tasks-not-a-map
+  (is (= {:errors [{:path [:tasks]
+                    :msg "must be a map, got [:not :a :map]"}]}
+         (load-cfg {:tasks [:not :a :map]}))))
+
+(deftest load-rejects-keyword-task-name
+  (is (= {:errors [{:path [:tasks :fmt]
+                    :msg "task names are symbols; write fmt instead of :fmt"}]}
+         (load-cfg {:tasks {:fmt {:do [{:sh "echo hi"}]}}}))))
+
+(deftest load-rejects-namespaced-keyword-task-name
+  (is (= {:errors [{:path [:tasks :foo/bar]
+                    :msg "task names are symbols; write foo/bar instead of :foo/bar"}]}
+         (load-cfg {:tasks {:foo/bar {:do [{:sh "echo hi"}]}}}))))
+
+(deftest load-rejects-non-symbol-task-name
+  (is (= {:errors [{:path [:tasks "fmt"]
+                    :msg "must be a symbol, got \"fmt\""}]}
+         (load-cfg {:tasks {"fmt" {:do [{:sh "echo hi"}]}}}))))
+
+(deftest load-rejects-non-map-task
+  (is (= {:errors [{:path [:tasks 'fmt]
+                    :msg "must be a map, got \"not-a-map\""}]}
+         (load-cfg {:tasks {'fmt "not-a-map"}}))))
+
+(deftest load-rejects-task-without-do-or-depends
+  (is (= {:errors [{:path [:tasks 'fmt]
+                    :msg "must define :do or :depends"}]}
+         (load-cfg {:tasks {'fmt {:doc "x"}}}))))
+
+(deftest load-rejects-non-string-doc
+  (is (= {:errors [{:path [:tasks 'fmt :doc]
+                    :msg "must be a string, got 5"}]}
+         (load-cfg {:tasks {'fmt {:doc 5
+                                  :do [{:sh "echo hi"}]}}}))))
+
+(deftest load-rejects-task-with-unknown-key
+  (is (= {:errors [{:path [:tasks 'dev]
+                    :msg (str "unknown key :extra-deps (allowed: :doc, :args, "
+                              ":do, :depends, :deps, :paths)")}]}
+         (load-cfg {:tasks {'dev {:extra-deps {}
+                                  :do [{:sh "echo hi"}]}}}))))
+
+(deftest load-rejects-reserved-task-names
+  (doseq [n config/reserved-task-names]
+    (is (= {:errors [{:path [:tasks (symbol n)]
+                      :msg (str "conflicts with built-in command \"" n "\"")}]}
+           (load-cfg {:tasks {(symbol n) {:do [{:sh "echo hi"}]}}}))))
+  (is (= #{"help" "version" "tasks" "completion" "__complete"}
+         config/reserved-task-names)))
+
+;; ---------------------------------------------------------------------------
+;; load-config: :do and step errors
+;; ---------------------------------------------------------------------------
+
+(deftest load-rejects-non-step-do
+  (is (= {:errors [{:path [:tasks 'fmt :do]
+                    :msg (str "must be a step map or non-empty vector of "
+                              "steps, got \"echo hi\"")}]}
+         (load-cfg {:tasks {'fmt {:do "echo hi"}}}))))
+
+(deftest load-rejects-empty-do
+  (is (= {:errors [{:path [:tasks 'fmt :do]
+                    :msg "must contain at least 1 element"}]}
+         (load-cfg {:tasks {'fmt {:do []}}}))))
+
+(deftest load-rejects-step-not-a-map
+  (is (= {:errors [{:path [:tasks 'fmt :do 0]
+                    :msg "must be a map, got \"echo hi\""}]}
+         (load-cfg {:tasks {'fmt {:do ["echo hi"]}}}))))
+
+(deftest load-rejects-step-with-multiple-action-keys
+  (is (= {:errors [{:path [:tasks 'fmt :do 0]
+                    :msg "must contain exactly one of :sh, :run"}]}
+         (load-cfg {:tasks {'fmt {:do [{:sh "echo a"
+                                        :run "scripts/foo.lg"}]}}}))))
+
+(deftest load-rejects-step-with-no-action-key
+  (is (= {:errors [{:path [:tasks 'fmt :do 0]
+                    :msg "must contain exactly one of :sh, :run"}]}
+         (load-cfg {:tasks {'fmt {:do [{}]}}}))))
+
+(deftest load-rejects-step-with-unknown-key
+  (is (= {:errors [{:path [:tasks 'fmt :do 0]
+                    :msg "unknown key :env (allowed: :sh, :run)"}]}
+         (load-cfg {:tasks {'fmt {:do [{:sh "echo hi"
+                                        :env {"FOO" "1"}}]}}}))))
+
+(deftest load-rejects-bad-action-values
+  (is (= {:errors [{:path [:tasks 'fmt :do 0 :sh]
+                    :msg "must be a string or vector of strings, got 5"}]}
+         (load-cfg {:tasks {'fmt {:do [{:sh 5}]}}})))
+  (is (= {:errors [{:path [:tasks 'fmt :do 0 :sh]
+                    :msg "must be a non-blank string"}]}
+         (load-cfg {:tasks {'fmt {:do [{:sh ""}]}}})))
+  (is (= {:errors [{:path [:tasks 'fmt :do 0 :sh]
+                    :msg "must be a non-empty vector of strings"}]}
+         (load-cfg {:tasks {'fmt {:do [{:sh []}]}}}))))
+
+(deftest load-rejects-non-placeholder-keyword-in-step-vector
+  (is (= {:errors [{:path [:tasks 'fmt :do 0 :sh 1]
+                    :msg (str "must be a string, :arg/<name>, or :var/<name> "
+                              "placeholder, got :env")}]}
+         (load-cfg {:tasks {'fmt {:do [{:sh ["echo" :env]}]}}}))))
+
+;; ---------------------------------------------------------------------------
+;; load-config: task :args declarations
+;; ---------------------------------------------------------------------------
+
+(deftest load-accepts-task-args
+  (let [cfg {:tasks {'deploy {:args [{:name :env
+                                      :type [:enum "prod" "staging"]}
+                                     {:name :port
+                                      :type :int}
+                                     {:name :version
+                                      :type :string
+                                      :default "latest"}]
+                              :do [{:sh ["./deploy.sh" :arg/env :arg/version]}
+                                   {:run ["notify.lg" :arg/env :arg/port]}]}}}]
+    (is (= {:cfg cfg} (load-cfg cfg)))))
+
+(deftest load-rejects-empty-args
+  (is (= {:errors [{:path [:tasks 'd :args]
+                    :msg "must contain at least 1 element"}]}
+         (load-cfg {:tasks {'d {:args []
+                                :do [{:sh "echo hi"}]}}}))))
+
+(deftest load-rejects-arg-with-unknown-key
+  (is (= {:errors [{:path [:tasks 'd :args 0]
+                    :msg "unknown key :typ (allowed: :name, :type, :default)"}]}
+         (load-cfg {:tasks {'d {:args [{:name :env
+                                        :typ :int}]
+                                :do [{:sh "echo hi"}]}}}))))
+
+(deftest load-rejects-namespaced-arg-name
+  (is (= {:errors [{:path [:tasks 'd :args 0 :name]
+                    :msg "must be an unqualified keyword, got :foo/env"}]}
+         (load-cfg {:tasks {'d {:args [{:name :foo/env}]
+                                :do [{:sh "echo hi"}]}}}))))
+
+(deftest load-rejects-duplicate-arg-name
+  (is (= {:errors [{:path [:tasks 'd :args 1 :name]
+                    :msg "duplicate arg name :env"}]}
+         (load-cfg {:tasks {'d {:args [{:name :env} {:name :env}]
+                                :do [{:sh "echo hi"}]}}}))))
+
+(deftest load-rejects-bad-arg-type
+  (is (= {:errors [{:path [:tasks 'd :args 0 :type]
+                    :msg "must be :int, :string, or [:enum ...], got :float"}]}
+         (load-cfg {:tasks {'d {:args [{:name :env
+                                        :type :float}]
+                                :do [{:sh "echo hi"}]}}}))))
+
+(deftest load-rejects-enum-with-one-value
+  (is (= {:errors [{:path [:tasks 'd :args 0 :type]
+                    :msg "must list at least 2 enum values"}]}
+         (load-cfg {:tasks {'d {:args [{:name :env
+                                        :type [:enum "prod"]}]
+                                :do [{:sh "echo hi"}]}}}))))
+
+(deftest load-rejects-int-arg-with-string-default
+  (is (= {:errors [{:path [:tasks 'd :args 0 :default]
+                    :msg "must be an integer (type :int), got \"x\""}]}
+         (load-cfg {:tasks {'d {:args [{:name :port
+                                        :type :int
+                                        :default "x"}]
+                                :do [{:sh "echo hi"}]}}}))))
+
+(deftest load-rejects-required-arg-after-defaulted
+  (is (= {:errors [{:path [:tasks 'd :args 1]
+                    :msg "required arg :env cannot follow an arg with :default"}]}
+         (load-cfg {:tasks {'d {:args [{:name :version
+                                        :default "latest"}
+                                       {:name :env}]
+                                :do [{:sh "echo hi"}]}}}))))
+
+;; ---------------------------------------------------------------------------
+;; load-config: :arg/* and :var/* placeholder cross-checks
+;; ---------------------------------------------------------------------------
+
+(deftest load-rejects-unknown-arg-placeholder
+  (is (= {:errors [{:path [:tasks 'd :do 0 :sh 1]
+                    :msg "unknown placeholder :arg/typo (declared: :env)"}]}
+         (load-cfg {:tasks {'d {:args [{:name :env}]
+                                :do [{:sh ["echo" :arg/typo]}]}}}))))
+
+(deftest load-rejects-arg-placeholder-without-args
+  (is (= {:errors [{:path [:tasks 'd :do 0 :sh 1]
+                    :msg "placeholder :arg/x used but no :args declared"}]}
+         (load-cfg {:tasks {'d {:do [{:sh ["echo" :arg/x]}]}}}))))
+
+(deftest load-rejects-arg-placeholder-in-single-step-map-do
+  ;; Validation runs before normalization, so the map form is walked too.
+  (is (= {:errors [{:path [:tasks 'd :do :sh 1]
+                    :msg "placeholder :arg/x used but no :args declared"}]}
+         (load-cfg {:tasks {'d {:do {:sh ["echo" :arg/x]}}}}))))
+
+(deftest load-rejects-unknown-var-placeholder
+  (is (= {:errors [{:path [:tasks 'd :do 0 :sh 1]
+                    :msg "unknown placeholder :var/typo (defined: :version)"}]}
+         (load-cfg {:vars {:version "1"}
+                    :tasks {'d {:do [{:sh ["echo" :var/typo]}]}}}))))
+
+(deftest load-rejects-var-placeholder-without-vars
+  (is (= {:errors [{:path [:tasks 'd :do 0 :sh 1]
+                    :msg "placeholder :var/x used but no :vars defined"}]}
+         (load-cfg {:tasks {'d {:do [{:sh ["echo" :var/x]}]}}}))))
+
+(deftest load-accepts-known-var-placeholder
+  (let [cfg {:vars {:version "1"}
+             :tasks {'d {:do [{:run ["t.lg" :var/version]}]}}}]
+    (is (= {:cfg cfg} (load-cfg cfg)))))
+
+;; ---------------------------------------------------------------------------
+;; load-config: :depends structural
+;; ---------------------------------------------------------------------------
+
+(deftest load-rejects-depends-not-a-vector
+  (is (= {:errors [{:path [:tasks 'd :depends]
+                    :msg "must be a vector, got fmt"}]}
+         (load-cfg {:tasks {'d {:depends 'fmt}}}))))
+
+(deftest load-rejects-empty-depends
+  (is (= {:errors [{:path [:tasks 'd :depends]
+                    :msg "must contain at least 1 element"}]}
+         (load-cfg {:tasks {'d {:depends []}}}))))
+
+(deftest load-rejects-depends-entry-wrong-type
+  (is (= {:errors [{:path [:tasks 'd :depends 0]
+                    :msg "must be a task symbol or [task item...] vector, got \"fmt\""}]}
+         (load-cfg {:tasks {'fmt {:do [{:sh "echo hi"}]}
+                            'd {:depends ["fmt"]}}}))))
+
+(deftest load-rejects-depends-vector-entry-non-symbol-head
+  (is (= {:errors [{:path [:tasks 'd :depends 0 0]
+                    :msg "first element must be a task symbol, got \"fmt\""}]}
+         (load-cfg {:tasks {'d {:depends [["fmt" "prod"]]}}}))))
+
+(deftest load-rejects-depends-vector-entry-bad-item
+  (is (= {:errors [{:path [:tasks 'd :depends 0 1]
+                    :msg "must be a string, :arg/<name>, or :var/<name>, got 5"}]}
+         (load-cfg {:tasks {'fmt {:do [{:sh "echo hi"}]}
+                            'd {:args [{:name :env}]
+                                :depends [['fmt 5]]}}}))))
+
+;; ---------------------------------------------------------------------------
+;; load-config: single-step-map :do normalization
+;; ---------------------------------------------------------------------------
+
+(deftest load-normalizes-single-sh-step-map
+  (let [r (load-cfg {:tasks {'fmt {:do {:sh "echo hi"}}}})]
+    (is (= [{:sh "echo hi"}] (get-in r [:cfg :tasks 'fmt :do])))))
+
+(deftest load-keeps-vector-do-as-is
+  (let [r (load-cfg {:tasks {'ci {:do [{:sh "echo a"} {:run "t.lg"}]}}})]
+    (is (= [{:sh "echo a"} {:run "t.lg"}] (get-in r [:cfg :tasks 'ci :do])))))
+
+(deftest load-leaves-depends-only-task-without-do
+  (let [r (load-cfg {:tasks {'fmt {:do [{:sh "echo hi"}]}
+                             'check {:depends ['fmt]}}})]
+    (is (nil? (get-in r [:cfg :tasks 'check :do])))
+    (is (= ['fmt] (get-in r [:cfg :tasks 'check :depends])))))
+
+;; ---------------------------------------------------------------------------
+;; load-config: error aggregation
+;; ---------------------------------------------------------------------------
+
+(deftest load-collects-multiple-errors-in-schema-order
+  (is (= {:errors [{:path [:vars :version]
+                    :msg "must be a string or number, got [:x]"}
+                   {:path [:tasks 'lint :do 0]
+                    :msg "unknown key :shh (allowed: :sh, :run)"}]}
+         (load-cfg {:vars {:version [:x]}
+                    :tasks {'lint {:do [{:shh "x"}]}}}))))
+
+;; ---------------------------------------------------------------------------
+;; accessors — pure functions over a loaded cfg map, no I/O
+;; ---------------------------------------------------------------------------
+
+(deftest accessors-read-cfg-values
+  (let [cfg {:vars {:version "1.2.0"}
+             :tasks {'fmt {:do [{:sh "echo hi"}]}}}]
+    (is (= {:version "1.2.0"} (config/vars cfg)))
+    (is (= {'fmt {:do [{:sh "echo hi"}]}} (config/tasks cfg)))))
+
+(deftest accessors-default-on-empty-cfg
+  (is (= {} (config/vars {})))
+  (is (= {} (config/tasks {}))))
+
+;; ---------------------------------------------------------------------------
+;; coords-at (transitive: a fetched dep's own deps, read from lgx.edn)
+;; ---------------------------------------------------------------------------
+
+(deftest coords-at-returns-empty-when-no-lgx-edn
+  (let [dir (str "/tmp/rite-coords-at-test-" (rand-int 100000000))]
+    (mkdir dir)
+    (is (= [] (config/coords-at dir)))
+    (os/sh "rm" "-rf" dir)))
+
+(deftest coords-at-returns-empty-when-deps-absent
+  (let [dir (str "/tmp/rite-coords-at-test-" (rand-int 100000000))]
+    (mkdir dir)
+    (spit (str dir "/lgx.edn") "{:paths [\"src\"]}")
+    (is (= [] (config/coords-at dir)))
+    (os/sh "rm" "-rf" dir)))
+
+(deftest coords-at-reads-deps-from-lgx-edn
+  (let [dir (str "/tmp/rite-coords-at-test-" (rand-int 100000000))]
+    (mkdir dir)
+    (spit (str dir "/lgx.edn")
+          "{:deps {foo/bar {:git/url \"https://github.com/foo/bar\" :git/sha \"abc\"}}}")
+    (let [m (into {} (config/coords-at dir))]
+      (is (= "abc" (:git/sha (get m 'foo/bar)))))
+    (os/sh "rm" "-rf" dir)))
+
+(deftest coords-at-rejects-non-map-top-level
+  (let [dir (str "/tmp/rite-coords-at-test-" (rand-int 100000000))]
+    (mkdir dir)
+    (spit (str dir "/lgx.edn") "[:not :a :map]")
+    (is (= :threw (threw? #(config/coords-at dir))))
+    (os/sh "rm" "-rf" dir)))
+
+(deftest coords-at-is-lenient-about-other-keys
+  ;; A dep's lgx.edn may carry a malformed :tasks or a future top-level key;
+  ;; only its :deps matter and must still be returned.
+  (let [dir (str "/tmp/rite-coords-at-test-" (rand-int 100000000))]
+    (mkdir dir)
+    (spit (str dir "/lgx.edn")
+          (str "{:deps {foo/bar {:git/url \"https://github.com/foo/bar\" :git/sha \"abc\"}}"
+               " :tasks \"not-a-valid-tasks-map\""
+               " :future/key 123}"))
+    (let [m (into {} (config/coords-at dir))]
+      (is (= "abc" (:git/sha (get m 'foo/bar)))))
+    (os/sh "rm" "-rf" dir)))
+
+(deftest coords-at-still-validates-its-coords
+  (let [dir (str "/tmp/rite-coords-at-test-" (rand-int 100000000))]
+    (mkdir dir)
+    (spit (str dir "/lgx.edn")
+          "{:deps {bad/coord {:local/root \"x\" :git/url \"y\" :git/sha \"z\"}}}")
+    (is (= :threw (threw? #(config/coords-at dir))))
+    (os/sh "rm" "-rf" dir)))
+
+(deftest coords-at-error-carries-rendered-report-and-marker
+  (let [dir (str "/tmp/rite-coords-at-test-" (rand-int 100000000))]
+    (mkdir dir)
+    (spit (str dir "/lgx.edn") "{:deps {foo/bar {:git/url \"u\"}}}")
+    (let [r (try
+              (config/coords-at dir)
+              (catch e {:msg (ex-message e)
+                        :data (ex-data e)}))]
+      (is (= dir (:rite/invalid-dep-config (:data r))))
+      (is (str/includes? (:msg r) (str "invalid lgx.edn in " dir " (1 error)")))
+      (is (str/includes? (:msg r) "must specify :git/sha or :git/tag")))
+    (os/sh "rm" "-rf" dir)))
