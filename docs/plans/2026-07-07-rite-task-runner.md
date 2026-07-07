@@ -53,7 +53,7 @@ All verified against the let-go 1.11.1 source (`~/.lgx/let-go/source/1.11.1`):
           :do {:run ["scripts/notify.lg" :arg/env]}}}}
 ```
 
-- Root map is **closed**: only `:vars` and `:tasks`. Anything else (`:contexts`, `:paths`, `:main`, …) is rejected with a schema error.
+- Root map is **closed**: only `:vars` and `:tasks`. Anything else (`:contexts`, `:paths`, `:main`, …) is rejected with a schema error. Both keys are optional — `{}` is a valid `rite.edn` (a project with no tasks yet).
 - `:vars` — map of **unqualified keyword** → string or number (numbers are stringified during normalization). Flat: vars do not reference other vars.
 - Task keys (closed map): `:doc`, `:args`, `:do`, `:depends`, `:deps`, `:paths`. Renames from lgx: `:extra-deps` → `:deps`, `:extra-paths` → `:paths`. Dropped: `:with`, `:extra-resource-paths`. A task must have at least `:do` or `:depends` (cross-check).
 - `:args`, `:do`, step grammar (`:sh`/`:run`, string or vector values, `:arg/<name>` placeholders, `{{name}}` templates) keep lgx semantics exactly (see `lgx/config.lg`, `lgx/args.lg`, `lgx/tasks.lg`).
@@ -65,7 +65,7 @@ Bindings for a running task form one map with two namespaces: `{:arg/env "prod",
 
 - Vector-form step items: `:arg/<name>` and `:var/<name>` keywords substitute whole items — shell-quoted in `:sh`, verbatim in `:run` (same rules as lgx `args/substitute`).
 - `{{name}}` in any step string: looked up as `:arg/name` first, then `:var/name` — **args shadow vars**. Unknown tokens pass through untouched (lgx `args/expand` behavior).
-- Validation: an `:arg/*` placeholder must name a declared arg of that task; a `:var/*` placeholder (and any `{{name}}` that would only match a var) must name a key in `:vars` — except `{{name}}` tokens keep lgx's lenient pass-through (no load error for unknown `{{...}}`; only keyword placeholders are strictly validated).
+- Validation rule (one rule, no exceptions): **only keyword placeholders are validated at load time** — an `:arg/*` placeholder must name a declared arg of that task, a `:var/*` placeholder must name a key in `:vars`. `{{...}}` templates are always lenient: resolved at substitution time when they match a binding (args shadow vars), passed through verbatim otherwise, never a load error.
 
 ### `:depends`
 
@@ -356,7 +356,7 @@ Note on lgx test sources: unit tests for ported modules start from the correspon
   `help.lg`: pure renderers. `main.lg` (mirror `../lgx/lgx.lg` structure, heavily trimmed):
   1. `(def version "0.1.0")`.
   2. In `main`: **first** check `(script/script-mode? os/getenv)` → `(script/run-script!)` (never returns). This must precede `cli/user-args` — in script mode argv[1] is the task script and must not be misread as the dev-mode prefix.
-  3. Else: `cli/user-args` → `parse-leading-flags` → dispatch: nil/`help`/`-h`/`--help` → print usage; `tasks` → tasks block only (error exit 1 when no project/no tasks? — print "no tasks defined" info, exit 0); `version` → `rite <version>`; anything else → task lookup: find-project! + load-config!, unknown task → `rite: '<x>' is not a task. See 'rite help'.` exit 1; else bind CLI args (errors + usage-line on failure, exit 1), `plan/build-plan`, plan errors → print + exit 1, else `tasks/run-plan!`.
+  3. Else: `cli/user-args` → `parse-leading-flags` → dispatch: nil/`help`/`-h`/`--help` → print usage; `tasks` → requires a project (`find-project!`, exit 1 with "no rite.edn found..." otherwise); with a project but an empty/absent `:tasks`, print `no tasks defined in rite.edn` and exit 0, else print the tasks block; `version` → `rite <version>`; anything else → task lookup: find-project! + load-config!, unknown task → `rite: '<x>' is not a task. See 'rite help'.` exit 1; else bind CLI args (errors + usage-line on failure, exit 1), `plan/build-plan`, plan errors → print + exit 1, else `tasks/run-plan!`.
   4. Keep the `*compiling-aot*` guard around `(main)`.
 
 - [ ] **Step 4: Verify manually in dev mode**
@@ -373,7 +373,7 @@ Note on lgx test sources: unit tests for ported modules start from the correspon
 
 - [ ] **Step 1: Write the harness**
   Model on `../lgx/tests/run.sh` + `e2e.sh` (pin `lg` via mise, `lgx build`, temp `RITE_HOME`, assert helpers). Scenarios, each a fresh temp project dir:
-  1. `rite` / `rite help` → usage with task rows and signatures; `rite tasks` → list only.
+  1. `rite` / `rite help` → usage with task rows and signatures; `rite tasks` → list only; `rite tasks` outside any project → exit 1; `rite tasks` with `{}` config → "no tasks defined" and exit 0.
   2. `:sh` task runs, streams output, exit code propagates on failure.
   3. `{{var}}` and `:var/kw` substitution (incl. shell-quoting of a var with spaces).
   4. `:args`: defaults, enum rejection message + usage line, too-many-args.
