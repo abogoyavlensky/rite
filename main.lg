@@ -1,0 +1,10 @@
+(ns rite.main
+  (:require [rite.core :as c]))
+
+(defn- main []
+  (println (c/greet "let-go")))
+
+; Top-level forms run during AOT compilation too. Guard so `lg -b` doesn't
+; execute the CLI while bundling.
+(when-not *compiling-aot*
+  (main))

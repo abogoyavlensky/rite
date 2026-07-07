@@ -1,0 +1,12 @@
+bin/
+*.lgb
+.DS_Store
+.idea/
+.lsp/
+lsp/
+.nrepl-history
+.nrepl-port
+.vscode
+.calva
+.env
+.nrepl-port

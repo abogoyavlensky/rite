@@ -1,0 +1,7 @@
+{:paths ["src" "test" "main.lg"]
+ :file-pattern #re "\\.lg?$"
+ :parallel? true
+ :sort-ns-references? true
+ :remove-multiple-non-indenting-spaces? true
+ :split-keypairs-over-multiple-lines? true
+ :function-arguments-indentation :cursive}
