@@ -105,9 +105,11 @@ out="$(cd "$proj" && RITE_HOME="$home" "$RITE" tasks)"
 assert_contains "$out" "rite fmt" "tasks: lists fmt"
 assert_not_contains "$out" "Usage:" "tasks: list only (no synopsis)"
 
-set +e; out="$(cd /tmp && "$RITE" tasks 2>&1)"; rc=$?; set -e
+noproj="$(mktemp -d)"
+set +e; out="$(cd "$noproj" && "$RITE" tasks 2>&1)"; rc=$?; set -e
 [[ $rc -eq 1 ]] || fail "tasks no-project: expected exit 1 (got $rc)"
 assert_contains "$out" "no rite.edn found" "tasks no-project: error message"
+rm -rf "$noproj"
 
 proj_e="$(mktemp -d)"; echo '{}' > "$proj_e/rite.edn"
 set +e; out="$(cd "$proj_e" && RITE_HOME="$home" "$RITE" tasks 2>&1)"; rc=$?; set -e
@@ -287,7 +289,9 @@ EOF
 out="$(cd "$proj" && RITE_NO_COLOR=1 RITE_HOME="$home" "$RITE" hi 2>&1)"
 if has_esc "$out"; then fail "RITE_NO_COLOR: output still had escape codes"; fi
 pass "RITE_NO_COLOR: no escape codes in output"
-out_c="$(cd "$proj" && RITE_HOME="$home" "$RITE" hi 2>&1)"
+# Clear RITE_NO_COLOR explicitly so a caller that already exported it doesn't
+# turn this default-color assertion into a spurious failure.
+out_c="$(cd "$proj" && RITE_NO_COLOR= RITE_HOME="$home" "$RITE" hi 2>&1)"
 if has_esc "$out_c"; then
     pass "default: colored headers contain escape codes"
 else
