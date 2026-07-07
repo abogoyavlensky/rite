@@ -14,8 +14,7 @@
          e2e {:doc "Build the bundle and run unit + e2e tests"
               :do [{:sh "bash tests/run.sh"}]}
 
-         check {:doc "Run all checks"
+         check {:doc "Run all checks (fmt, lint, then build + unit + e2e)"
                 :do [{:sh "lgx fmt check"}
                      {:sh "lgx lint"}
-                     {:sh "lgx test"}
                      {:sh "bash tests/run.sh"}]}}}

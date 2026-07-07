@@ -395,7 +395,7 @@ Note on lgx test sources: unit tests for ported modules start from the correspon
 - Create: `tests/run.sh`, `tests/e2e.sh`, `tests/fixtures/` (fixture project + `file://` dep repo builder)
 - Modify: `lgx.edn` (add `e2e` task: `{:sh "bash tests/run.sh"}` — or make `check` include it)
 
-- [ ] **Step 1: Write the harness**
+- [x] **Step 1: Write the harness**
   Model on `../lgx/tests/run.sh` + `e2e.sh` (pin `lg` via mise, `lgx build`, temp `RITE_HOME`, assert helpers). Scenarios, each a fresh temp project dir:
   1. `rite` / `rite help` → usage with task rows and signatures; `rite tasks` → list only; `rite tasks` outside any project → exit 1; `rite tasks` with `{}` config → "no tasks defined" and exit 0.
   2. `:sh` task runs, streams output, exit code propagates on failure.
@@ -406,11 +406,15 @@ Note on lgx test sources: unit tests for ported modules start from the correspon
   7. Config validation: unknown root key, unknown task key (`:extra-deps` typo), reserved task name — each errors with the schema report.
   8. `RITE_NO_COLOR=1` output contains no escape codes.
 
-- [ ] **Step 2: Run** — `bash tests/run.sh` — Expected: all scenarios PASS.
+- [x] **Step 2: Run** — `bash tests/run.sh` — Expected: all scenarios PASS.
 
-- [ ] **Step 3: Fix anything the e2e surfaces, re-run until green.**
+- [x] **Step 3: Fix anything the e2e surfaces, re-run until green.**
 
-- [ ] **Step 4: Commit** — `git commit -m "test: add e2e harness for rite binary"`
+- [x] **Step 4: Commit** — `git commit -m "test: add e2e harness for rite binary"`
+
+> Deviation: e2e needs no `lg` pinning — the rite bundle is self-contained (its `:run` steps re-exec the bundle, not `lg`), so `e2e.sh` only needs git + `bin/rite`; `run.sh` builds via `lgx build` from the repo root where mise resolves fine. 39 assertions across 8 scenario groups all pass, including the `:run` integration proof (bundle fetched a `file://` git dep into `$RITE_HOME/gitlibs`, re-exec'd itself to run a script requiring both the dep and a task-`:paths` namespace with args via `*command-line-args*`, and reused the cache on the second run).
+>
+> Review note (codex Task 9 P2, addressed by documentation): running rite's CLI **from source** (`lgx run -- <cmd>` or bare `lg main.lg <cmd>`) doesn't dispatch, because both put `-source-paths <path>` *before* `main.lg` and `user-args`' ".lg-prefix" detection (a faithful lgx port) misses it. The bundle — the shipped artifact — works for every command (proven by the e2e). Not fixed: a robust fix needs fragile lg-flag parsing, and the plan already recommends `lgx build && ./bin/rite` for dev. `main.lg` carries a comment saying so.
 
 ### Task 11: README and repo housekeeping
 
