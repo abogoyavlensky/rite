@@ -1,0 +1,98 @@
+;; Unit tests for rite.help — pure usage/help rendering.
+;; Run with: lgx test  (from project root)
+
+(ns rite.help-test
+  (:require [clojure.test :refer [deftest is]]
+            [rite.help :as help]
+            [string :as str]))
+
+;; ---------------------------------------------------------------------------
+;; task-line
+;; ---------------------------------------------------------------------------
+
+(deftest task-line-no-args-no-doc
+  (is (= "  rite fmt" (help/task-line 'fmt {:do [{:sh "echo"}]}))))
+
+(deftest task-line-doc-aligned-to-column
+  ;; short name padded so the doc lands at the doc column
+  (is (= "  rite fmt                     Format sources"
+         (help/task-line 'fmt {:doc "Format sources"
+                               :do [{:sh "echo"}]}))))
+
+(deftest task-line-signature-shown
+  (is (= "  rite deploy <env> [version]  Deploy"
+         (help/task-line 'deploy {:doc "Deploy"
+                                  :args [{:name :env}
+                                         {:name :version
+                                          :default "latest"}]
+                                  :do [{:sh "echo"}]}))))
+
+(deftest task-line-long-left-gets-two-space-gap
+  ;; when the left column overflows doc-col, fall back to a 2-space gap
+  (is (= "  rite deploy <environment> [version]  Deploy"
+         (help/task-line 'deploy {:doc "Deploy"
+                                  :args [{:name :environment}
+                                         {:name :version
+                                          :default "latest"}]
+                                  :do [{:sh "echo"}]}))))
+
+;; ---------------------------------------------------------------------------
+;; task-rows
+;; ---------------------------------------------------------------------------
+
+(deftest task-rows-sorted-by-name
+  (let [rows (help/task-rows {'lint {:do [{:sh "l"}]}
+                              'fmt {:do [{:sh "f"}]}})]
+    (is (str/starts-with? rows "  rite fmt"))
+    (is (str/includes? rows "\n  rite lint"))))
+
+(deftest task-rows-empty-is-nil
+  (is (nil? (help/task-rows {}))))
+
+;; ---------------------------------------------------------------------------
+;; tasks-block
+;; ---------------------------------------------------------------------------
+
+(deftest tasks-block-nil-project
+  (is (nil? (help/tasks-block nil))))
+
+(deftest tasks-block-empty-tasks-is-nil
+  (is (nil? (help/tasks-block {:cfg {}}))))
+
+(deftest tasks-block-invalid-config-warns
+  (let [b (help/tasks-block {:errors [{:path []
+                                       :msg "boom"}]})]
+    (is (str/includes? b "Tasks:"))
+    (is (str/includes? b "invalid"))))
+
+(deftest tasks-block-lists-tasks
+  (let [b (help/tasks-block {:cfg {:tasks {'fmt {:doc "Format"
+                                                 :do [{:sh "f"}]}}}})]
+    (is (str/includes? b "Tasks:"))
+    (is (str/includes? b "rite fmt"))
+    (is (str/includes? b "Format"))))
+
+;; ---------------------------------------------------------------------------
+;; usage
+;; ---------------------------------------------------------------------------
+
+(deftest usage-has-synopsis-and-sections
+  (let [u (help/usage nil)]
+    (is (str/includes? u "rite - task runner for any project"))
+    (is (str/includes? u "Commands:"))
+    (is (str/includes? u "rite <task> [args...]"))
+    (is (str/includes? u "rite tasks"))
+    (is (str/includes? u "rite version"))
+    (is (str/includes? u "rite help"))
+    (is (str/includes? u "Options:"))
+    (is (str/includes? u "--verbose"))))
+
+(deftest usage-embeds-tasks-when-present
+  (let [u (help/usage {:cfg {:tasks {'fmt {:doc "Format"
+                                           :do [{:sh "f"}]}}}})]
+    (is (str/includes? u "Tasks:"))
+    (is (str/includes? u "rite fmt"))))
+
+(deftest usage-omits-tasks-when-no-project
+  (let [u (help/usage nil)]
+    (is (not (str/includes? u "Tasks:")))))

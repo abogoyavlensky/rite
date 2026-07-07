@@ -1,0 +1,78 @@
+(ns rite.help
+  (:require [rite.args :as args]
+            [rite.config :as config]
+            [string :as str]))
+
+;; --------------------------------------------------------------------------
+;; Usage / help rendering (pure, so it's testable; main.lg stays a thin shell
+;; since requiring rite.main from a test would execute its (main)).
+;; --------------------------------------------------------------------------
+
+;; Description column the static rows below are hand-aligned to; task rows align
+;; to it too (see task-line). If you re-pad the rows, update this constant.
+(def ^:private doc-col 31)
+
+(def ^:private command-rows
+  (str "  rite <task> [args...]        Run a task\n"
+       "  rite tasks                   List available tasks\n"
+       "  rite version                 Print version\n"
+       "  rite help                    Show this help\n"))
+
+(def ^:private option-rows
+  (str "  --verbose                    Print resolved :run invocations and env before running\n"))
+
+(defn- pad-right [s n]
+  (let [c (count s)]
+    (if (>= c n) s (str s (apply str (repeat (- n c) " "))))))
+
+;; Tasks render as `rite <name> <arg> [arg]` aligned to the same description
+;; column as the built-in command rows, so they read as first-class commands.
+(defn task-line [task-name task]
+  (let [sig (args/signature (or (:args task) []))
+        left (str "  rite " task-name
+                  (if (str/blank? sig) "" (str " " sig)))
+        doc (:doc task)]
+    (cond
+      (str/blank? doc) left
+      (>= (count left) doc-col) (str left "  " doc)
+      :else (str (pad-right left doc-col) doc))))
+
+(defn task-rows
+  "The sorted `rite <name> <sig>  <doc>` rows for a tasks map, joined by
+   newlines, or nil when the map is empty. Iterates the keys themselves so a
+   task like foo/bar keeps its namespace."
+  [tasks-map]
+  (let [sorted-keys (sort-by str (keys tasks-map))]
+    (when (seq sorted-keys)
+      (str/join "\n" (map (fn [k] (task-line k (get tasks-map k)))
+                          sorted-keys)))))
+
+;; `loaded` is config/load-config output ({:cfg ...} or {:errors ...}), or nil
+;; when no project was found. Help must stay usable with a broken config, so an
+;; invalid rite.edn renders a one-line warning instead of failing.
+(defn tasks-block [loaded]
+  (cond
+    (nil? loaded) nil
+
+    (:errors loaded)
+    (str "\nTasks:\n"
+         "  (omitted — rite.edn is invalid; run a task to see the errors)\n")
+
+    :else
+    (when-let [rows (task-rows (config/tasks (:cfg loaded)))]
+      (str "\nTasks:\n" rows "\n"))))
+
+;; Assembled at call time so the colored titles honor RITE_NO_COLOR at runtime.
+;; Order: synopsis -> Commands -> Tasks (if any) -> Options. `loaded` may be nil
+;; (no project found); the tasks block is then omitted.
+(defn usage [loaded]
+  (str "rite - task runner for any project\n"
+       "\n"
+       "Usage: rite [options] <task> [args...]\n"
+       "\n"
+       "Commands:\n"
+       command-rows
+       (or (tasks-block loaded) "")
+       "\n"
+       "Options:\n"
+       option-rows))

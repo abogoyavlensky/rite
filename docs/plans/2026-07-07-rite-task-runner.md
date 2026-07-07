@@ -344,17 +344,19 @@ Note on lgx test sources: unit tests for ported modules start from the correspon
 - Create: `src/rite/tasks.lg`
 - Test: `test/rite/tasks_test.lg`
 
-- [ ] **Step 1: Write tests**
+- [x] **Step 1: Write tests**
   Port the pure helpers' tests from lgx's tasks coverage (`as-string`, substitution of step values with merged arg+var bindings). New: `run-plan!` semantics are exercised in e2e (side-effectful); here test step-value preparation: `:sh` vector with `:var/x` → quoted; `:sh` string with `{{x}}`; `:run` string → argv split after expansion.
 
-- [ ] **Step 2: Run** — `lgx test test/rite/tasks_test.lg` — Expected: FAIL.
+- [x] **Step 2: Run** — `lgx test test/rite/tasks_test.lg` — Expected: FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
   Port `../lgx/lgx/tasks.lg` with changes: `:sh` runs `(os/exec* "sh" "-c" cmd)` (streaming — no buffered replay); `:run` delegates to `script/exec-run-step!`; `run-plan!` iterates the plan from Task 5 — for each entry print `task-header`, run its steps with its bindings; first non-zero exit → `(os/exit code)`; all done → `(os/exit 0)`. A `:depends`-only task prints its header and runs nothing. Each entry with `:run` steps resolves its own basis once (lazily, only when the task has a `:run` step).
 
-- [ ] **Step 4: Run** — `lgx test test/rite/tasks_test.lg` — Expected: PASS.
+- [x] **Step 4: Run** — `lgx test test/rite/tasks_test.lg` — Expected: PASS.
 
-- [ ] **Step 5: Commit** — `git commit -m "feat: add streaming task execution over the plan"`
+- [x] **Step 5: Commit** — `git commit -m "feat: add streaming task execution over the plan"`
+
+> Deviation: To honor "resolve basis once per entry", split Task 7's `script/exec-run-step!` into `script/resolve-basis!` (deps + source-paths, called once per entry when the task has any `:run` step) and `script/exec-script!` (per-step env-set + re-exec). `run-entry!` resolves the basis once and threads the `sp-value` to each `:run` step. Public prep helpers `sh-command`/`run-argv` (were private in lgx) so tasks_test can cover substitution. The `:run` step line echoes the joined argv (no `lgx run`-style prefix).
 
 ### Task 9: Entry point, dispatch, and help
 

@@ -1,11 +1,86 @@
-(ns rite.main)
+(ns rite.main
+  (:require [rite.args :as args]
+            [rite.cli :as cli]
+            [rite.config :as config]
+            [rite.help :as help]
+            [rite.plan :as plan]
+            [rite.script :as script]
+            [rite.tasks :as tasks]))
 
-;; Placeholder entry point. The real CLI dispatch (script mode, task running,
-;; help) is built in a later task; this stub only keeps the tree compiling and
-;; `lgx build` green while the supporting namespaces land.
+(def version "0.1.0")
+
+(defn- print-usage! []
+  ;; Non-bang load-config so help stays usable with a broken rite.edn (renders
+  ;; a warning row) or no project at all (tasks block omitted).
+  (print (help/usage (when-let [project (config/find-project)]
+                       (config/load-config project)))))
+
+(defn- cmd-version! []
+  (println (str "rite " version)))
+
+(defn- cmd-tasks! []
+  (let [project (config/find-project!)
+        cfg (config/load-config! project)
+        t (config/tasks cfg)]
+    (if (empty? t)
+      (println "no tasks defined in rite.edn")
+      (println (help/task-rows t)))))
+
+(defn- unknown-task! [cmd]
+  (write! *err* (str "rite: '" cmd "' is not a task. See 'rite help'.\n"))
+  (os/exit 1))
+
+(defn- run-task! [cmd rest-args project cfg verbose?]
+  (let [t (config/tasks cfg)
+        vars (config/vars cfg)
+        k (symbol cmd)
+        task (get t k)
+        decls (vec (or (:args task) []))
+        ;; Bind the CLI args first for a friendly per-arg error + usage line;
+        ;; build-plan re-binds the root, but its errors read as plan errors.
+        bound (args/bind-args decls rest-args)]
+    (when (:errors bound)
+      (doseq [msg (:errors bound)]
+        (write! *err* (str "rite: " cmd ": " msg "\n")))
+      (write! *err* (str (args/usage-line cmd decls) "\n"))
+      (os/exit 1))
+    (let [r (plan/build-plan t vars k rest-args)]
+      (if (:errors r)
+        (do (doseq [msg (:errors r)]
+              (write! *err* (str "rite: " msg "\n")))
+            (os/exit 1))
+        (tasks/run-plan! (:plan r) project verbose?)))))
+
+(defn- run-task-cmd! [cmd rest-args verbose?]
+  (let [project (config/find-project!)
+        cfg (config/load-config! project)
+        t (config/tasks cfg)]
+    (if (contains? t (symbol cmd))
+      (run-task! cmd rest-args project cfg verbose?)
+      (unknown-task! cmd))))
+
+(defn- dispatch [cmd rest-args verbose?]
+  (case cmd
+    nil (print-usage!)
+    "help" (print-usage!)
+    "-h" (print-usage!)
+    "--help" (print-usage!)
+    "tasks" (cmd-tasks!)
+    "version" (cmd-version!)
+    "-v" (cmd-version!)
+    "--version" (cmd-version!)
+    (run-task-cmd! cmd rest-args verbose?)))
 
 (defn- main []
-  (println "rite: not yet implemented"))
+  ;; Script mode must be checked BEFORE cli/user-args: in a re-exec'd child,
+  ;; os/args is [<exe> <script> <args>...], and <script> must not be misread as
+  ;; the dev-mode ".lg prefix".
+  (if (script/script-mode? os/getenv)
+    (script/run-script!)
+    (let [parsed (cli/parse-leading-flags (cli/user-args os/args))
+          cmd (first (:args parsed))
+          rest-args (vec (rest (:args parsed)))]
+      (dispatch cmd rest-args (:verbose? parsed)))))
 
 ; Top-level forms run during AOT compilation too. Guard so `lg -b` doesn't
 ; execute the CLI while bundling.
