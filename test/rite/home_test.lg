@@ -1,0 +1,28 @@
+;; Unit tests for rite.home.
+;; Run with: lgx test  (from project root)
+
+(ns rite.home-test
+  (:require [clojure.test :refer [deftest is]]
+            [rite.home :as home]
+            [rite.path :as path]))
+
+;; os/getenv returns "" for an unset var, and home/root treats a blank value as
+;; absent, so each test sets "" to simulate "unset" and restores env afterward.
+
+(deftest root-prefers-rite-home
+  (os/setenv "RITE_HOME" "/tmp/rite-home-test")
+  (os/setenv "LGX_HOME" "/tmp/lgx-home-test")
+  (is (= "/tmp/rite-home-test" (home/root)))
+  (os/setenv "RITE_HOME" "")
+  (os/setenv "LGX_HOME" ""))
+
+(deftest root-falls-back-to-lgx-home
+  (os/setenv "RITE_HOME" "")
+  (os/setenv "LGX_HOME" "/tmp/lgx-home-test")
+  (is (= "/tmp/lgx-home-test" (home/root)))
+  (os/setenv "LGX_HOME" ""))
+
+(deftest root-defaults-to-home-dot-lgx
+  (os/setenv "RITE_HOME" "")
+  (os/setenv "LGX_HOME" "")
+  (is (= (path/join (os/getenv "HOME") ".lgx") (home/root))))

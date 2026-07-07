@@ -1,5 +1,0 @@
-(ns rite.core)
-
-(defn greet
-  [name]
-  (str "Welcome to " name "!"))

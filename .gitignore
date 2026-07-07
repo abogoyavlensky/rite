@@ -12,3 +12,4 @@ lsp/
 .nrepl-port
 .clj-pulse
 .tmp/
+.clj-kondo/.cache/

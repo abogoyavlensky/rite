@@ -1,6 +1,0 @@
-(ns rite.core-test
-  (:require [clojure.test :refer [deftest is]]
-            [rite.core :as c]))
-
-(deftest test-greet-ok
-  (is (= "Welcome to let-go!" (c/greet "let-go"))))
