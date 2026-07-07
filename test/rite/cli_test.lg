@@ -1,0 +1,57 @@
+;; Unit tests for rite.cli — pure argv / leading-flag parsing.
+;; Run with: lgx test  (from project root)
+
+(ns rite.cli-test
+  (:require [clojure.test :refer [deftest is]]
+            [rite.cli :as cli]))
+
+;; ---------------------------------------------------------------------------
+;; parse-leading-flags — only --verbose (repeatable, stops at first non-flag)
+;; ---------------------------------------------------------------------------
+
+(deftest parse-bare-command
+  (let [r (cli/parse-leading-flags ["fmt"])]
+    (is (= false (:verbose? r)))
+    (is (= ["fmt"] (vec (:args r))))))
+
+(deftest parse-verbose-flag
+  (let [r (cli/parse-leading-flags ["--verbose" "fmt"])]
+    (is (= true (:verbose? r)))
+    (is (= ["fmt"] (vec (:args r))))))
+
+(deftest parse-verbose-repeatable
+  (let [r (cli/parse-leading-flags ["--verbose" "--verbose" "fmt"])]
+    (is (= true (:verbose? r)))
+    (is (= ["fmt"] (vec (:args r))))))
+
+(deftest parse-verbose-then-task-with-args
+  (let [r (cli/parse-leading-flags ["--verbose" "deploy" "prod"])]
+    (is (= true (:verbose? r)))
+    (is (= ["deploy" "prod"] (vec (:args r))))))
+
+(deftest parse-no-flags-empty-args
+  (let [r (cli/parse-leading-flags [])]
+    (is (= false (:verbose? r)))
+    (is (= [] (vec (:args r))))))
+
+(deftest parse-stops-at-first-command
+  ;; A --verbose after the command is not consumed; it stays in :args.
+  (let [r (cli/parse-leading-flags ["deploy" "--verbose" "x"])]
+    (is (= false (:verbose? r)))
+    (is (= ["deploy" "--verbose" "x"] (vec (:args r))))))
+
+;; ---------------------------------------------------------------------------
+;; user-args (dev-vs-bundle program-prefix strip)
+;; ---------------------------------------------------------------------------
+
+(deftest user-args-dev-prefix
+  ;; lg main.lg <cmd> ... — second arg ends in .lg, drop the first two.
+  (is (= ["deploy" "prod"] (vec (cli/user-args ["lg" "main.lg" "deploy" "prod"])))))
+
+(deftest user-args-bundle-prefix
+  ;; ./rite <cmd> ... — drop only the program name.
+  (is (= ["deploy" "prod"] (vec (cli/user-args ["rite" "deploy" "prod"])))))
+
+(deftest user-args-bundle-no-command
+  ;; ./rite — no user args at all.
+  (is (= [] (vec (cli/user-args ["rite"])))))

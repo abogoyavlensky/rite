@@ -168,22 +168,24 @@ Note on lgx test sources: unit tests for ported modules start from the correspon
 - Create: `test/rite/path_test.lg`, `test/rite/style_test.lg`, `test/rite/spec_test.lg`, `test/rite/home_test.lg`
 - Delete: `src/rite/core.lg`, `test/rite/core_test.lg`
 
-- [ ] **Step 1: Port tests from lgx**
+- [x] **Step 1: Port tests from lgx**
   Copy `../lgx/test/lgx/{path,style,spec,home}_test.lg` to `test/rite/`, renaming namespaces `lgx.*` → `rite.*`. Adapt: style tests use `RITE_NO_COLOR`; home tests cover the new fallback chain — `RITE_HOME` wins, else `LGX_HOME`, else `$HOME/.lgx` — and drop `test-runner-dir`.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
   Run: `lgx test`
   Expected: FAIL (namespaces `rite.path` etc. not found).
 
-- [ ] **Step 3: Port implementations**
+- [x] **Step 3: Port implementations**
   Copy `../lgx/lgx/{path,spec}.lg` verbatim with ns renames. `style.lg`: rename env gate to `RITE_NO_COLOR`; keep `green`/`purple`/`header`/`task-header`/`step-line` API. `home.lg`: only `root` — `RITE_HOME` if non-blank, else `LGX_HOME` if non-blank, else `(path/join (os/getenv "HOME") ".lgx")`. Delete `src/rite/core.lg` and `test/rite/core_test.lg`.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
   Run: `lgx test`
   Expected: PASS, 0 failures.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat: port path/style/spec/home helpers from lgx"`
+
+> Deviation: Added `.clj-kondo/config.edn` (ported from lgx, adapted for `rite.main`) and a `.gitignore` entry for `.clj-kondo/.cache/`. Needed so `lgx lint`/`check` stay green now that sources use the `os` builtin namespace — the scaffold's `core.lg` didn't. `home_test.lg` restores env vars between cases to avoid cross-test leakage.
 
 ### Task 2: CLI argv parsing
 

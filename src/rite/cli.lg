@@ -1,0 +1,42 @@
+(ns rite.cli
+  (:require [string :as str]))
+
+;; --------------------------------------------------------------------------
+;; CLI argv parsing
+;;
+;; Isolated from rite.main so it can be unit-tested: rite.main's load runs
+;; (main), so a test cannot require it. These helpers are pure.
+;; --------------------------------------------------------------------------
+
+(defn user-args
+  "Strip the program prefix from `argv`, returning the user's command + args.
+   In dev (`lg main.lg <cmd> ...`) the second arg is the script path ending in
+   .lg, so drop two; as a bundle (`./rite <cmd> ...`) drop only the program."
+  [argv]
+  (let [argv (vec argv)]
+    (cond
+      (and (>= (count argv) 2)
+           (str/ends-with? (nth argv 1) ".lg"))
+      (drop 2 argv)
+      :else
+      (rest argv))))
+
+(defn parse-leading-flags
+  "Parse leading global flags from `args` (the `user-args` output). Consumes
+   leading `--verbose` tokens, repeatable, up to the first non-flag token (the
+   task name). Returns {:verbose? bool :args [str ...]} where :args is the task
+   and everything after it (flags past the task are left untouched)."
+  [args]
+  (loop [verbose? false
+         xs (seq args)]
+    (if (nil? xs)
+      {:verbose? verbose?
+       :args []}
+      (let [tok (first xs)]
+        (cond
+          (= tok "--verbose")
+          (recur true (next xs))
+
+          :else
+          {:verbose? verbose?
+           :args (vec xs)})))))
