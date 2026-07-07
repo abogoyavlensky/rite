@@ -1,5 +1,7 @@
 # rite Task Runner Implementation Plan
 
+> **STATUS: COMPLETE** (2026-07-08). All 11 tasks implemented, committed, and reviewed. `lgx check` is green: fmt clean, lint 0 errors / 0 warnings, 292 unit tests (352 assertions), 39 e2e assertions, bundle builds. See the completion summary at the end.
+
 > **For agentic workers:** Use executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Extract lgx's task subsystem into rite — a generic, self-contained task runner binary with an embedded let-go runtime for `:run` steps, plus new `:vars` and `:depends` features.
@@ -422,10 +424,40 @@ Note on lgx test sources: unit tests for ported modules start from the correspon
 - Rewrite: `README.md`
 - Modify: `lgx.edn` (ensure `check` covers fmt+lint+test+e2e), `.gitignore` (bin/, tmp)
 
-- [ ] **Step 1: Rewrite README**
+- [x] **Step 1: Rewrite README**
   Use /writing-clearly. Cover: what rite is (generic task runner, embedded let-go, single binary); quickstart with a minimal `rite.edn`; full annotated `rite.edn` reference (`:vars`, task keys, args, steps, `:depends` incl. arg forwarding and run-once semantics); the `:run` embedded-runtime explanation + the `io/resource` limitation; env vars table (`RITE_HOME` sharing lgx's cache, `RITE_NO_COLOR`); CLI reference; development section (lgx-based: `lgx test`, `lgx build`, `bash tests/run.sh`).
 
-- [ ] **Step 2: Verify all checks**
+- [x] **Step 2: Verify all checks**
   Run: `lgx check` (and `bash tests/run.sh` if not included) — Expected: PASS.
 
-- [ ] **Step 3: Commit** — `git commit -m "docs: rewrite README for rite task runner"`
+- [x] **Step 3: Commit** — `git commit -m "docs: rewrite README for rite task runner"`
+
+> Deviation: `check` was simplified to fmt + lint + `bash tests/run.sh` (run.sh already runs build + unit + e2e), dropping the standalone `lgx test` step to avoid running the unit suite twice. `.gitignore` already ignored `bin/` and `.tmp/`, so no change was needed there. README written per /writing-clearly (active voice, concrete, no em-dashes).
+
+---
+
+## Completion summary (2026-07-08)
+
+**What was implemented.** rite is now a complete, self-contained task runner binary. All 11 tasks landed, each test-first with a per-task commit:
+
+- Foundation ports from lgx: `path`, `style` (`RITE_NO_COLOR`), `spec`, `home` (`RITE_HOME` → `LGX_HOME` → `~/.lgx`).
+- CLI argv parsing (`user-args`, `--verbose`).
+- Args + vars binding/substitution: `:arg/*`/`:var/*` placeholders, `{{name}}` templates (args shadow vars), shell-quoting, signatures.
+- `rite.edn` config schema + validation: closed root (`:vars`/`:tasks`), closed task map, `:vars` scalars, step grammar, `:args` rules, and every cross-check (unknown placeholders, arg/var forwarding, `:depends` arity/type, cycle detection).
+- Pure execution planner (`plan/build-plan`): depth-first, listed order, deduped by `[name resolved-args]`, arg forwarding, runtime value errors.
+- Gitlibs dep fetching with transitive resolution, sharing lgx's `$LGX_HOME` cache.
+- `:run` self-exec script mode: parent resolves the basis and re-execs the rite binary; the child runs the script in-process via `load-string` with `require` resolving off `LG_SOURCE_PATHS`.
+- Streaming task execution over the plan (`os/exec*`, live stdio, first non-zero exit aborts).
+- Entry point, dispatch, and help rendering.
+- E2E harness (`tests/run.sh` + `tests/e2e.sh`): 8 scenario groups, 39 assertions, including the `:run` integration proof against the built bundle.
+- README rewritten; `check` task covers fmt + lint + build + unit + e2e.
+
+**Verification.** Final `lgx check`: fmt clean, lint 0/0, 292 unit tests / 352 assertions / 0 failures, 39 e2e assertions, bundle builds and runs. The built binary was driven end-to-end (usage, tasks, version, `:sh`, vars, args + enum/arity errors, `:depends` ordering + diamond dedup + forwarding, mid-chain failure propagation, and a `:run` task that fetched a `file://` git dep and required both the dep and a task-`:paths` namespace).
+
+**Spike result (de-risked the whole design).** Confirmed against let-go 1.11.1 in a bundled binary: `set-read-clj!`, `alter-var-root` of `*command-line-args*`, and `load-string` of a script that `require`s a namespace off `LG_SOURCE_PATHS` all work. Correction: `os/args` is a value (vector, argv[0] = exe), not a function.
+
+**Deviations (all recorded per-task above).** Notable ones: added `.clj-kondo/config.edn` (needed once sources use the `os` builtin); the `:arg/*`/`:var/*` placeholder cross-check lives at the root schema level so it can see `:vars`; split `exec-run-step!` into `resolve-basis!` + `exec-script!` for once-per-entry lazy resolution; `source-paths` prepends the project root.
+
+**Codex review findings resolved.** P1: Task 1 deleted `rite.core` but left `main.lg` requiring it — fixed with a placeholder stub. P2s (all fixed): `:run` source paths must include the project root (an explicit `LG_SOURCE_PATHS` disables lg's `.` search); restore `LG_SOURCE_PATHS` to `"."` when originally blank (no `os/unsetenv`, and lg treats `""` as search-none); resolve the `:run` basis lazily on the first `:run` step; e2e hermeticity (clear `RITE_NO_COLOR`, isolated temp dir); README example needed a `lint` task to load. **Left unchanged with a note (needs human sign-off):** the sha/tag cache-key encoding matches lgx exactly because the plan mandates a shared `$LGX_HOME` cache; hardening it would fork the layout. **Advisory:** running rite's CLI from source via `lgx run` does not dispatch (lgx injects `-source-paths` before `main.lg`); the shipped bundle is the product and the plan already recommends `lgx build && ./bin/rite`.
+
+**What the plan could have specified better.** The `source-paths` basis was described two ways: the Design section (line 80) said "task `:paths` (absolute) ++ dep dirs", while Task 7 step 2 said "project root + task `:paths` ++ deps". The project root is required (an explicit `LG_SOURCE_PATHS` stops lg searching `.`), so the two should have agreed on including it; the inconsistency led to an initial miss that codex caught. The plan also assumed `os/args` was callable and did not anticipate let-go lacking `os/unsetenv` (which forced the `LG_SOURCE_PATHS` restore-to-`"."` workaround), nor that a bundled binary needs `.clj-kondo/config.edn` to lint the `os` builtin. It could also have said explicitly that "resolve the `:run` basis once, lazily" means *on the first `:run` step reached*, not eagerly before step 1.
