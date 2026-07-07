@@ -7,7 +7,11 @@
             [rite.script :as script]
             [rite.tasks :as tasks]))
 
-(def version "0.1.0")
+(defn- version
+  "The release version, single-sourced from resources/VERSION (embedded in the
+   bundle via :resource-paths). io is a let-go builtin, used like os."
+  []
+  (io/slurp (io/resource "VERSION")))
 
 (defn- print-usage! []
   ;; Non-bang load-config so help stays usable with a broken rite.edn (renders
@@ -16,7 +20,7 @@
                        (config/load-config project)))))
 
 (defn- cmd-version! []
-  (println (str "rite " version)))
+  (println (str "rite " (version))))
 
 (defn- cmd-tasks! []
   (let [project (config/find-project!)

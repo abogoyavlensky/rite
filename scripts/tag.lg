@@ -1,0 +1,8 @@
+(ns tag
+  (:require [os :as os]))
+
+(defn- version []
+  (str "v" (io/slurp (io/resource "VERSION"))))
+
+(println (str "Creating tag " (version)))
+(os/sh "git" "tag" (version))

@@ -1,5 +1,7 @@
 {:paths ["src"]
+ :resource-paths ["resources"]
  :main "main.lg"
+ :lg-version "1.11.1"
  :targets {:bin {:out "bin/rite"}}
  :deps {}
  :tasks {fmt {:doc "Format source files (available actions: fix, check; default: fix)"
@@ -17,4 +19,9 @@
          check {:doc "Run all checks (fmt, lint, then build + unit + e2e)"
                 :do [{:sh "lgx fmt check"}
                      {:sh "lgx lint"}
-                     {:sh "bash tests/run.sh"}]}}}
+                     {:sh "bash tests/run.sh"}]}
+
+         release {:doc "Tag v<VERSION> from resources/VERSION and push"
+                  :extra-paths ["scripts"]
+                  :do [{:run "scripts/tag.lg"}
+                       {:sh "git push --tags"}]}}}

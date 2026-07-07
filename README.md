@@ -7,6 +7,45 @@ rite is a [let-go](https://github.com/nooga/let-go) program bundled into one
 executable, so the binary carries the full let-go compiler. `:run` steps
 execute let-go scripts in-process, with no separate `lg` on the machine.
 
+## Installation
+
+### With [Homebrew](https://brew.sh)
+
+Works on macOS and Linux:
+
+```sh
+brew install abogoyavlensky/tap/rite
+```
+
+### With [mise](https://mise.jdx.dev)
+
+```sh
+mise use -g github:abogoyavlensky/rite@latest
+```
+
+Or pin a version in `.mise.toml`:
+
+```toml
+[tools]
+"github:abogoyavlensky/rite" = "latest"
+```
+
+### Manual
+
+Download the archive for your platform from the
+[releases page](https://github.com/abogoyavlensky/rite/releases), extract it, and
+put `rite` on your `PATH`:
+
+```sh
+VERSION=0.1.0
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')   # linux | darwin
+ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+curl -sSL -o rite.tar.gz \
+  "https://github.com/abogoyavlensky/rite/releases/download/v${VERSION}/rite_${VERSION}_${OS}_${ARCH}.tar.gz"
+tar -xzf rite.tar.gz
+mv rite ~/.local/bin/
+```
+
 ## Quickstart
 
 Put a `rite.edn` at your project root:
@@ -246,3 +285,19 @@ lgx check                # fmt, lint, unit tests, and e2e
 Develop the CLI against the built binary (`lgx build && ./bin/rite <task>`).
 Running the CLI from source through `lgx run` does not dispatch, because lgx puts
 its own flags before the entry script.
+
+### Releasing
+
+The version lives in one place, `resources/VERSION`. Bump it, commit, then tag:
+
+```bash
+printf '0.2.0' > resources/VERSION      # no trailing newline
+git add resources/VERSION && git commit -m "Release 0.2.0"
+lgx release                             # tags v0.2.0 and pushes the tag
+```
+
+The pushed tag triggers `.github/workflows/release.yml`, which builds the four
+platform binaries, publishes a GitHub Release, and updates the Homebrew formula
+in `abogoyavlensky/homebrew-tap`. This needs two one-time setup steps: a public
+`homebrew-tap` repo under your account, and a `HOMEBREW_TAP_TOKEN` repository
+secret (a PAT with write access to that tap).
