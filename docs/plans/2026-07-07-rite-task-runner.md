@@ -237,7 +237,7 @@ Note on lgx test sources: unit tests for ported modules start from the correspon
 - Create: `src/rite/config.lg`
 - Test: `test/rite/config_test.lg`
 
-- [ ] **Step 1: Write tests (structural schema)**
+- [x] **Step 1: Write tests (structural schema)**
   Start from `../lgx/test/lgx/config_test.lg`, keeping: find-project walking, EDN parse errors, deps coord rules, task-name rules (symbols, reserved set now `help version tasks completion __complete`), `:args` rules, step rules, `:do` normalization, unknown-`:arg/*` placeholder cross-check. Adapt/add:
   - Root map closed to `:vars`/`:tasks`; `:contexts`, `:paths`, `:main` etc. rejected.
   - `:vars`: keys must be unqualified keywords; values strings or numbers; number values normalized to strings.
@@ -246,14 +246,16 @@ Note on lgx test sources: unit tests for ported modules start from the correspon
   - `:var/*` placeholders in steps must name a defined var; `:arg/*` must name a declared arg (existing check).
   - `coords-at` reads a dep dir's `lgx.edn` (keep lgx name/behavior).
 
-- [ ] **Step 2: Run** — `lgx test test/rite/config_test.lg` — Expected: FAIL.
+- [x] **Step 2: Run** — `lgx test test/rite/config_test.lg` — Expected: FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
   Port and trim `../lgx/lgx/config.lg`: `config-name` is `"rite.edn"`; drop contexts/targets/main/lg-version/resource-paths schemas and accessors; keep `rel-path-errors`, coord/deps schemas, task/step/args schemas with the key changes above; keep `load-config`/`load-config!`/`errors-report`/`normalize-config` (extend normalization: stringify `:vars` values). `:depends` is schema-checked structurally here (vector; entries symbol or non-empty vector starting with a symbol whose tail items are strings/`:arg/*`/`:var/*` keywords); semantic cross-checks land in Task 5's validation section below — implement them here in config.lg but they may call into pure helpers. Accessors: `tasks`, `vars`.
 
-- [ ] **Step 4: Run** — `lgx test test/rite/config_test.lg` — Expected: PASS.
+- [x] **Step 4: Run** — `lgx test test/rite/config_test.lg` — Expected: PASS.
 
-- [ ] **Step 5: Commit** — `git commit -m "feat: add rite.edn config schema and validation"`
+- [x] **Step 5: Commit** — `git commit -m "feat: add rite.edn config schema and validation"`
+
+> Deviation: Placeholder cross-check (`:arg/*` + `:var/*`) lives at the **root** schema level (a `[:fn placeholder-refs-errors]` over the whole cfg), not on the task schema, because the `:var/*` check needs the root `:vars`. Added `:rite/invalid-dep-config` marker (rite-namespaced) on `coords-at` errors; the report text still says "invalid lgx.edn in <dir>" since deps carry lgx.edn. Added `dep-config-name "lgx.edn"` constant distinct from `config-name "rite.edn"`. `first-line` added to clj-kondo `:unused-private-var` exclude (used only in catch bodies). NOTE for later tasks: clj-kondo `:syntax {:level :off}` masks unbalanced parens — rely on `lgx fmt check` (cljfmt) to catch them.
 
 ### Task 5: Depends cross-checks and execution plan
 

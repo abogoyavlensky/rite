@@ -1,5 +1,6 @@
 (ns rite.config
   (:require [edn]
+            [rite.args :as args]
             [rite.path :as path]
             [rite.spec :as spec]
             [string :as str]))
@@ -414,13 +415,132 @@
                    (task-ref-errors task-name task defined-vars var-label))
                  (or (:tasks cfg) {})))))
 
+;; --- :depends semantic cross-checks: every entry names a defined task; entry
+;; --- placeholders forward a parent arg / defined var; literal-only entries are
+;; --- value-checked against the dep's :args; and the name graph is acyclic.
+
+(defn- entry-value-checkable?
+  "True when every tail item is a plain literal string (no {{...}} template and
+   no placeholder) — only then are the dep's arg values fully known at load."
+  [items]
+  (every? (fn [item]
+            (and (string? item)
+                 (nil? (str/index-of item "{{"))))
+          items))
+
+(defn- depends-entry-ref-errors
+  "Semantic errors for one :depends entry of task `parent-name`, at
+   base-path [:tasks parent-name :depends idx]."
+  [tasks defined-vars parent-name parent-declared parent-arg-label entry idx]
+  (let [dep-name (if (symbol? entry) entry (first entry))
+        items (if (symbol? entry) [] (vec (rest entry)))
+        base-path [:tasks parent-name :depends idx]]
+    (if-not (contains? tasks dep-name)
+      [{:path base-path
+        :msg (str "depends on undefined task " dep-name " (defined: "
+                  (str/join ", " (sort (map str (keys tasks)))) ")")}]
+      (let [dep-task (get tasks dep-name)
+            dep-decls (or (:args dep-task) [])
+            ph-errors
+            (vec (mapcat
+                   (fn [item]
+                     (cond
+                       (arg-placeholder? item)
+                       (when-not (contains? parent-declared item)
+                         [{:path base-path
+                           :msg (if (nil? parent-arg-label)
+                                  (str "forwards " item " but task "
+                                       parent-name " declares no args")
+                                  (str "forwards " item " but task "
+                                       parent-name " has no such arg (declared: "
+                                       parent-arg-label ")"))}])
+
+                       (var-placeholder? item)
+                       (when-not (contains? defined-vars item)
+                         [{:path base-path
+                           :msg (str "references " item
+                                     " but no such var is defined")}])
+
+                       :else nil))
+                   items))]
+        (cond
+          (seq ph-errors) ph-errors
+
+          (entry-value-checkable? items)
+          (let [r (args/bind-args dep-decls items)]
+            (if (:errors r)
+              (mapv (fn [e] {:path base-path
+                             :msg (str "depends on " dep-name ": " e)})
+                    (:errors r))
+              []))
+
+          (> (count items) (count dep-decls))
+          [{:path base-path
+            :msg (str "too many arguments for " dep-name " (expected at most "
+                      (count dep-decls) ", got " (count items) ")")}]
+
+          :else [])))))
+
+(defn- depends-refs-errors [cfg]
+  (let [tasks (or (:tasks cfg) {})
+        vars (or (:vars cfg) {})
+        defined-vars (set (map (fn [k] (keyword "var" (name k))) (keys vars)))]
+    (vec (mapcat
+           (fn [[parent-name task]]
+             (let [decls (:args task)
+                   parent-declared (set (mapv #(keyword "arg" (name (:name %)))
+                                              (or decls [])))
+                   parent-arg-label (when decls
+                                      (str/join ", " (mapv (comp str :name)
+                                                           decls)))
+                   entries (or (:depends task) [])]
+               (mapcat (fn [i]
+                         (depends-entry-ref-errors tasks defined-vars
+                                                   parent-name parent-declared
+                                                   parent-arg-label
+                                                   (nth entries i) i))
+                       (range (count entries)))))
+           tasks))))
+
+(defn- task-dep-names [task]
+  (mapv (fn [entry] (if (symbol? entry) entry (first entry)))
+        (or (:depends task) [])))
+
+(defn- dfs-cycle
+  "Depth-first search for a cycle reachable from `node`. Returns the cycle as a
+   vector of names (first repeated at the end), or nil."
+  [graph node path on-path]
+  (if (contains? on-path node)
+    (conj (vec (drop-while #(not= % node) path)) node)
+    (let [new-path (conj path node)
+          new-on (conj on-path node)]
+      (loop [ds (get graph node [])]
+        (if (empty? ds)
+          nil
+          (or (dfs-cycle graph (first ds) new-path new-on)
+              (recur (rest ds))))))))
+
+(defn- depends-cycle-errors [cfg]
+  (let [tasks (or (:tasks cfg) {})
+        graph (into {} (map (fn [[k t]] [k (task-dep-names t)]) tasks))]
+    (loop [nodes (keys graph)]
+      (if (empty? nodes)
+        []
+        (let [c (dfs-cycle graph (first nodes) [] #{})]
+          (if c
+            [{:path [:tasks (first c)]
+              :msg (str "dependency cycle: " (str/join " -> " (map str c)))}]
+            (recur (rest nodes))))))))
+
 (def ^:private rite-schema
   [:and
    [:map {:closed true}
     [:vars {:optional true} vars-schema]
     [:tasks {:optional true}
      [:map-of [:fn task-name-errors] task-schema]]]
-   [:fn placeholder-refs-errors]])
+   [:fn placeholder-refs-errors]
+   [:fn depends-refs-errors]
+   [:fn depends-cycle-errors]])
 
 (defn- normalize-vars
   "Stringify every :vars value (numbers become their printed form)."

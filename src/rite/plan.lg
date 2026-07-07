@@ -1,0 +1,98 @@
+(ns rite.plan
+  (:require [rite.args :as args]))
+
+;; --------------------------------------------------------------------------
+;; Execution plan
+;;
+;; Pure: flatten a task invocation and its :depends graph into an ordered,
+;; deduped list of {:name :task :bindings} entries, root last. Depth-first, in
+;; listed order, deps before their dependents. Deduped by
+;; [task-name resolved-arg-strings] so a diamond dependency runs once, while
+;; the same task invoked with different args runs once per distinct arg set.
+;; Load-time validation (rite.config) has already checked task names, arg
+;; forwarding, and cycles; here the only new failure is a runtime arg value
+;; (a forwarded value that violates the dep's :type), surfaced as {:errors}.
+;; --------------------------------------------------------------------------
+
+(defn- resolve-item
+  "Resolve one dep-entry tail item against the parent's bindings: a string is
+   {{...}}-expanded, an :arg/*/:var/* keyword is substituted to its bound
+   value (verbatim)."
+  [item bindings]
+  (if (string? item)
+    (args/expand item bindings)
+    (first (args/substitute [item] bindings false))))
+
+(defn- resolve-entry
+  "Resolve a :depends entry against parent bindings into
+   [dep-name resolved-arg-strings]. A bare symbol carries no args."
+  [entry bindings]
+  (if (symbol? entry)
+    [entry []]
+    [(first entry)
+     (mapv (fn [item] (resolve-item item bindings)) (rest entry))]))
+
+(defn- bind-error-msg [name ref err]
+  (if (nil? ref)
+    (str "task " name ": " err)
+    (str "task " name " (required by " ref "): " err)))
+
+(declare add-task)
+
+(defn- add-deps
+  "Fold each of `depends`' entries into acc in listed order, stopping at the
+   first error."
+  [acc tasks-map vars parent-name parent-bindings depends]
+  (reduce
+    (fn [a entry]
+      (if (seq (:errors a))
+        a
+        (let [resolved (resolve-entry entry parent-bindings)
+              dep-name (first resolved)
+              dep-args (second resolved)
+              dep-task (get tasks-map dep-name)]
+          (if (nil? dep-task)
+            (update a :errors conj
+                    (str "task " parent-name " depends on unknown task "
+                         dep-name))
+            (add-task a tasks-map vars dep-name dep-task dep-args
+                      parent-name)))))
+    acc
+    depends))
+
+(defn- add-task
+  "Post-order: add all of task's transitive deps, then task itself. Skips a
+   [name arg-strings] key already present (dedup). `ref` names the task that
+   required this one, for error messages (nil for the root)."
+  [acc tasks-map vars name task arg-strings ref]
+  (let [key [name arg-strings]]
+    (if (contains? (:seen acc) key)
+      acc
+      (let [acc (update acc :seen conj key)
+            r (args/bind-args (or (:args task) []) arg-strings)]
+        (if (:errors r)
+          (update acc :errors into
+                  (mapv (fn [e] (bind-error-msg name ref e)) (:errors r)))
+          (let [bindings (args/task-bindings vars (:bindings r))
+                acc (add-deps acc tasks-map vars name bindings
+                              (or (:depends task) []))]
+            (update acc :plan conj {:name name
+                                    :task task
+                                    :bindings bindings})))))))
+
+(defn build-plan
+  "Flatten `root-name` (bound with `root-arg-strings`) and its :depends graph
+   into {:plan [{:name :task :bindings} ...]} (root last), or {:errors [...]}.
+   `tasks-map` is the normalized :tasks map; `vars` the project :vars."
+  [tasks-map vars root-name root-arg-strings]
+  (let [root-task (get tasks-map root-name)]
+    (if (nil? root-task)
+      {:errors [(str "unknown task " root-name)]}
+      (let [acc (add-task {:plan []
+                           :seen #{}
+                           :errors []}
+                          tasks-map vars root-name root-task root-arg-strings
+                          nil)]
+        (if (seq (:errors acc))
+          {:errors (:errors acc)}
+          {:plan (:plan acc)})))))

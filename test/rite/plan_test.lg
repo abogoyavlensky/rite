@@ -1,0 +1,134 @@
+;; Unit tests for rite.plan — pure :depends graph -> ordered, deduped plan.
+;; Run with: lgx test  (from project root)
+
+(ns rite.plan-test
+  (:require [clojure.test :refer [deftest is]]
+            [rite.plan :as plan]
+            [string :as str]))
+
+(defn- names [r]
+  (mapv :name (:plan r)))
+
+;; ---------------------------------------------------------------------------
+;; single task, no depends
+;; ---------------------------------------------------------------------------
+
+(deftest single-task-no-depends
+  (let [tasks {'fmt {:do [{:sh "echo hi"}]}}
+        r (plan/build-plan tasks {} 'fmt [])]
+    (is (= ['fmt] (names r)))
+    (is (= {} (:bindings (first (:plan r)))))))
+
+(deftest single-task-binds-own-args
+  (let [tasks {'deploy {:args [{:name :env}]
+                        :do [{:sh ["echo" :arg/env]}]}}
+        r (plan/build-plan tasks {} 'deploy ["prod"])]
+    (is (= ['deploy] (names r)))
+    (is (= {:arg/env "prod"} (:bindings (first (:plan r)))))))
+
+(deftest single-task-merges-vars
+  (let [tasks {'rel {:do [{:sh "echo {{version}}"}]}}
+        r (plan/build-plan tasks {:version "1.2.0"} 'rel [])]
+    (is (= {:var/version "1.2.0"} (:bindings (first (:plan r)))))))
+
+;; ---------------------------------------------------------------------------
+;; chain order: depth-first, listed order, deps before dependents
+;; ---------------------------------------------------------------------------
+
+(deftest chain-order-deps-before-dependents
+  (let [tasks {'a {:do [{:sh "echo a"}]}
+               'b {:depends ['a]
+                   :do [{:sh "echo b"}]}
+               'c {:depends ['b]
+                   :do [{:sh "echo c"}]}}
+        r (plan/build-plan tasks {} 'c [])]
+    (is (= ['a 'b 'c] (names r)))))
+
+(deftest listed-order-preserved
+  (let [tasks {'fmt {:do [{:sh "echo fmt"}]}
+               'lint {:do [{:sh "echo lint"}]}
+               'check {:depends ['fmt 'lint]}}
+        r (plan/build-plan tasks {} 'check [])]
+    (is (= ['fmt 'lint 'check] (names r)))))
+
+;; ---------------------------------------------------------------------------
+;; diamond dedup
+;; ---------------------------------------------------------------------------
+
+(deftest diamond-runs-shared-dep-once
+  (let [tasks {'a {:do [{:sh "echo a"}]}
+               'b {:depends ['a]
+                   :do [{:sh "echo b"}]}
+               'c {:depends ['a]
+                   :do [{:sh "echo c"}]}
+               'd {:depends ['b 'c]}}
+        r (plan/build-plan tasks {} 'd [])]
+    (is (= ['a 'b 'c 'd] (names r)))))
+
+(deftest same-dep-different-args-runs-twice
+  (let [tasks {'notify {:args [{:name :env}]
+                        :do [{:sh ["echo" :arg/env]}]}
+               'root {:depends [['notify "prod"] ['notify "staging"]]}}
+        r (plan/build-plan tasks {} 'root [])]
+    (is (= ['notify 'notify 'root] (names r)))
+    (is (= {:arg/env "prod"} (:bindings (nth (:plan r) 0))))
+    (is (= {:arg/env "staging"} (:bindings (nth (:plan r) 1))))))
+
+;; ---------------------------------------------------------------------------
+;; arg forwarding
+;; ---------------------------------------------------------------------------
+
+(deftest arg-forwarding-passes-parent-binding
+  (let [tasks {'notify {:args [{:name :env}]
+                        :do [{:sh ["echo" :arg/env]}]}
+               'deploy {:args [{:name :env
+                                :type [:enum "prod" "staging"]}]
+                        :depends [['notify :arg/env]]
+                        :do [{:sh "echo deploy"}]}}
+        r (plan/build-plan tasks {} 'deploy ["prod"])]
+    (is (= ['notify 'deploy] (names r)))
+    (is (= {:arg/env "prod"} (:bindings (first (:plan r)))))))
+
+(deftest var-template-in-dep-entry-expands
+  (let [tasks {'notify {:args [{:name :msg}]
+                        :do [{:sh ["echo" :arg/msg]}]}
+               'root {:depends [['notify "v{{version}}"]]}}
+        r (plan/build-plan tasks {:version "1.2.0"} 'root [])]
+    (is (= {:arg/msg "v1.2.0"
+            :var/version "1.2.0"} (:bindings (first (:plan r)))))))
+
+(deftest dep-arg-default-fills
+  (let [tasks {'notify {:args [{:name :env
+                                :default "dev"}]
+                        :do [{:sh ["echo" :arg/env]}]}
+               'root {:depends ['notify]}}
+        r (plan/build-plan tasks {} 'root [])]
+    (is (= {:arg/env "dev"} (:bindings (first (:plan r)))))))
+
+;; ---------------------------------------------------------------------------
+;; errors
+;; ---------------------------------------------------------------------------
+
+(deftest unknown-root-task-errors
+  (let [r (plan/build-plan {} {} 'nope [])]
+    (is (= {:errors ["unknown task nope"]} r))))
+
+(deftest forwarded-arg-enum-mismatch-errors
+  (let [tasks {'notify {:args [{:name :env
+                                :type [:enum "prod" "staging"]}]
+                        :do [{:sh ["echo" :arg/env]}]}
+               'deploy {:args [{:name :env}]
+                        :depends [['notify :arg/env]]
+                        :do [{:sh "echo deploy"}]}}
+        r (plan/build-plan tasks {} 'deploy ["qa"])]
+    (is (contains? r :errors))
+    (is (str/includes? (first (:errors r)) "must be one of: prod, staging"))
+    (is (str/includes? (first (:errors r)) "notify"))))
+
+(deftest root-arg-enum-mismatch-errors
+  (let [tasks {'deploy {:args [{:name :env
+                                :type [:enum "prod" "staging"]}]
+                        :do [{:sh "echo deploy"}]}}
+        r (plan/build-plan tasks {} 'deploy ["qa"])]
+    (is (contains? r :errors))
+    (is (str/includes? (first (:errors r)) "must be one of: prod, staging"))))

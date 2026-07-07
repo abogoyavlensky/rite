@@ -460,6 +460,93 @@
   (is (= {} (config/tasks {}))))
 
 ;; ---------------------------------------------------------------------------
+;; load-config: :depends semantic cross-checks (Task 5)
+;; ---------------------------------------------------------------------------
+
+(deftest load-rejects-depends-unknown-task
+  (is (= {:errors [{:path [:tasks 'check :depends 0]
+                    :msg "depends on undefined task deploy (defined: check, fmt)"}]}
+         (load-cfg {:tasks {'fmt {:do [{:sh "echo hi"}]}
+                            'check {:depends ['deploy]}}}))))
+
+(deftest load-rejects-depends-arg-forward-undeclared
+  (is (= {:errors [{:path [:tasks 'deploy :depends 0]
+                    :msg (str "forwards :arg/env but task deploy has no such "
+                              "arg (declared: :region)")}]}
+         (load-cfg {:tasks {'notify {:args [{:name :env}]
+                                     :do [{:sh "echo hi"}]}
+                            'deploy {:args [{:name :region}]
+                                     :depends [['notify :arg/env]]}}}))))
+
+(deftest load-rejects-depends-var-forward-undefined
+  (is (= {:errors [{:path [:tasks 'deploy :depends 0]
+                    :msg "references :var/ver but no such var is defined"}]}
+         (load-cfg {:tasks {'notify {:args [{:name :env}]
+                                     :do [{:sh "echo hi"}]}
+                            'deploy {:depends [['notify :var/ver]]}}}))))
+
+(deftest load-rejects-depends-literal-enum-mismatch
+  (is (= {:errors [{:path [:tasks 'root :depends 0]
+                    :msg (str "depends on deploy: argument <env> must be one "
+                              "of: prod, staging, got \"qa\"")}]}
+         (load-cfg {:tasks {'deploy {:args [{:name :env
+                                             :type [:enum "prod" "staging"]}]
+                                     :do [{:sh "echo hi"}]}
+                            'root {:depends [['deploy "qa"]]}}}))))
+
+(deftest load-rejects-depends-literal-too-many
+  (is (= {:errors [{:path [:tasks 'root :depends 0]
+                    :msg "depends on fmt: task takes no arguments (got 1)"}]}
+         (load-cfg {:tasks {'fmt {:do [{:sh "echo hi"}]}
+                            'root {:depends [['fmt "x"]]}}}))))
+
+(deftest load-rejects-depends-literal-missing-required
+  (is (= {:errors [{:path [:tasks 'root :depends 0]
+                    :msg "depends on deploy: missing required argument <env>"}]}
+         (load-cfg {:tasks {'deploy {:args [{:name :env}]
+                                     :do [{:sh "echo hi"}]}
+                            'root {:depends ['deploy]}}}))))
+
+(deftest load-rejects-depends-placeholder-too-many
+  ;; placeholder entry skips value checks but still bounds max arity
+  (is (= {:errors [{:path [:tasks 'root :depends 0]
+                    :msg "too many arguments for fmt (expected at most 0, got 1)"}]}
+         (load-cfg {:tasks {'fmt {:do [{:sh "echo hi"}]}
+                            'root {:args [{:name :env}]
+                                   :depends [['fmt :arg/env]]}}}))))
+
+(deftest load-accepts-valid-depends-forwarding
+  (let [cfg {:tasks {'notify {:args [{:name :env
+                                      :type [:enum "prod" "staging"]}]
+                              :do [{:sh ["echo" :arg/env]}]}
+                     'deploy {:args [{:name :env
+                                      :type [:enum "prod" "staging"]}]
+                              :depends [['notify :arg/env]]
+                              :do [{:sh "echo deploying"}]}}}]
+    (is (= {:cfg cfg} (load-cfg cfg)))))
+
+(deftest load-accepts-var-template-in-depends
+  ;; a {{...}} string in a dep entry is lenient at load time
+  (let [cfg {:vars {:version "1.2.0"}
+             :tasks {'notify {:args [{:name :msg}]
+                              :do [{:sh ["echo" :arg/msg]}]}
+                     'root {:depends [['notify "v{{version}}"]]}}}]
+    (is (= {:cfg cfg} (load-cfg cfg)))))
+
+(deftest load-rejects-self-cycle
+  (is (= {:errors [{:path [:tasks 'a]
+                    :msg "dependency cycle: a -> a"}]}
+         (load-cfg {:tasks {'a {:depends ['a]}}}))))
+
+(deftest load-rejects-mutual-cycle
+  (let [r (load-cfg {:tasks {'a {:depends ['b]}
+                             'b {:depends ['a]}}})]
+    (is (= 1 (count (:errors r))))
+    (is (str/includes? (:msg (first (:errors r))) "dependency cycle"))
+    (is (str/includes? (:msg (first (:errors r))) "a"))
+    (is (str/includes? (:msg (first (:errors r))) "b"))))
+
+;; ---------------------------------------------------------------------------
 ;; coords-at (transitive: a fetched dep's own deps, read from lgx.edn)
 ;; ---------------------------------------------------------------------------
 
