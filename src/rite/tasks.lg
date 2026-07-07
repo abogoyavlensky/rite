@@ -63,25 +63,27 @@
     (contains? step :run) (run-run-step! (:run step) bindings sp-value verbose?)
     :else (throw (ex-info "step has no action key" {:step step}))))
 
-(defn- has-run-step? [task]
-  (some #(contains? % :run) (or (:do task) [])))
-
 (defn- run-entry!
-  "Run one plan entry's :do steps in order. Resolves the :run basis once (only
-   when the task has a :run step). Returns the first non-zero step exit, or 0."
+  "Run one plan entry's :do steps in order. Returns the first non-zero step
+   exit, or 0. The :run basis is resolved lazily — once, on the first :run step
+   actually reached — so an earlier failing :sh step never triggers a dep
+   fetch, and multiple :run steps share one resolution."
   [entry project verbose?]
   (let [name (:name entry)
         task (:task entry)
-        bindings (:bindings entry)
-        sp-value (when (has-run-step? task)
-                   (script/resolve-basis! project task))]
+        bindings (:bindings entry)]
     (write! *err* (str (style/task-header name) "\n"))
-    (loop [steps (or (:do task) [])]
+    (loop [steps (or (:do task) [])
+           sp-value :unresolved]
       (if (empty? steps)
         0
-        (let [exit (run-step! (first steps) bindings sp-value verbose?)]
+        (let [step (first steps)
+              sp (if (and (contains? step :run) (= sp-value :unresolved))
+                   (script/resolve-basis! project task)
+                   sp-value)
+              exit (run-step! step bindings sp verbose?)]
           (if (zero? exit)
-            (recur (rest steps))
+            (recur (rest steps) sp)
             exit))))))
 
 (defn run-plan!

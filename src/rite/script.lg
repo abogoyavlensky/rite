@@ -61,12 +61,15 @@
   (drop-arg-separator (as-arg-vec value)))
 
 (defn source-paths
-  "The LG_SOURCE_PATHS list for a :run child: the task's :paths absolutized
+  "The LG_SOURCE_PATHS list for a :run child: the project root first (so a
+   script can require project/sibling namespaces — an explicit LG_SOURCE_PATHS
+   stops lg searching `.` implicitly), then the task's :paths absolutized
    against `project` (each checked with `exists?`, `warn`ing when missing but
-   still included, mirroring lgx), followed by the resolved dep source dirs.
-   Returns a vector of absolute paths."
+   still included, mirroring lgx), then the resolved dep source dirs. Returns a
+   vector of absolute paths."
   [project task-paths dep-paths exists? warn]
   (vec (concat
+         [project]
          (mapv (fn [p]
                  (let [abs (path/join project p)]
                    (when-not (exists? abs)
@@ -155,6 +158,10 @@
     (os/setenv "LG_READ_CLJ" "1")
     (let [exit (apply os/exec* exe argv)]
       (os/setenv "RITE_SCRIPT" (or prev-script ""))
-      (os/setenv "LG_SOURCE_PATHS" (or prev-sp ""))
+      ;; let-go has no unsetenv, and lg treats LG_SOURCE_PATHS="" as "search
+      ;; nothing" (not "unset") — restoring blank would disable the default `.`
+      ;; search for a later :sh step that runs lg. Restore "." (lg's unset
+      ;; default) when the var was originally absent.
+      (os/setenv "LG_SOURCE_PATHS" (if (str/blank? prev-sp) "." prev-sp))
       (os/setenv "LG_READ_CLJ" (or prev-clj ""))
       exit)))

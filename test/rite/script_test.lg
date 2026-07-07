@@ -46,13 +46,13 @@
 ;; source-paths (task :paths absolutized against project ++ dep paths)
 ;; ---------------------------------------------------------------------------
 
-(deftest source-paths-absolutizes-task-paths-then-deps
-  (is (= ["/proj/scripts" "/cache/dep-a/src"]
+(deftest source-paths-project-root-then-task-paths-then-deps
+  (is (= ["/proj" "/proj/scripts" "/cache/dep-a/src"]
          (script/source-paths "/proj" ["scripts"] ["/cache/dep-a/src"]
                               (fn [_] true) (fn [_] nil)))))
 
-(deftest source-paths-no-task-paths-just-deps
-  (is (= ["/cache/dep-a/src" "/cache/dep-b"]
+(deftest source-paths-no-task-paths-project-root-then-deps
+  (is (= ["/proj" "/cache/dep-a/src" "/cache/dep-b"]
          (script/source-paths "/proj" [] ["/cache/dep-a/src" "/cache/dep-b"]
                               (fn [_] true) (fn [_] nil)))))
 
@@ -61,7 +61,7 @@
         r (script/source-paths "/proj" ["missing"] []
                                (fn [_] false)
                                (fn [m] (swap! warnings conj m)))]
-    (is (= ["/proj/missing"] r))
+    (is (= ["/proj" "/proj/missing"] r))
     (is (= 1 (count @warnings)))))
 
 (deftest source-paths-env-joins-with-path-separator
