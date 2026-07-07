@@ -295,17 +295,21 @@ Note on lgx test sources: unit tests for ported modules start from the correspon
 - Create: `src/rite/deps.lg`
 - Test: `test/rite/deps_test.lg`
 
-- [ ] **Step 1: Write tests**
+- [x] **Step 1: Write tests**
   Start from `../lgx/test/lgx/cache_test.lg` (parse-git-url forms, coord-dir layout, ensure-lib! against `file://` fixture repos with RITE_HOME pointed at a temp dir, `:deps/root`, `:local/root`). Add `ensure-all!` transitive cases (move the lgx tests for it if they live in the lgx main-adjacent tests; otherwise write: dep with its own lgx.edn declaring a second dep → both fetched; conflicting coord → first-wins warning; cycle terminates). Drop let-go-source tests.
 
-- [ ] **Step 2: Run** — `lgx test test/rite/deps_test.lg` — Expected: FAIL.
+- [x] **Step 2: Run** — `lgx test test/rite/deps_test.lg` — Expected: FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
   Port `../lgx/lgx/cache.lg` minus the let-go-source section (gitlibs root under `home/root`). Move `ensure-all!`, `coords-at!`, `coord-label`, `coord-id`, and `print-installs!` from `../lgx/lgx.lg` into `deps.lg` (they were main-file privates in lgx; rite gives them a home so `tasks.lg` can call them). `merge-coords` comes along from lgx config (task `:deps` has nothing to merge over in rite — drop it unless `ensure-all!` needs the pair-list helpers; prefer dropping).
 
-- [ ] **Step 4: Run** — `lgx test test/rite/deps_test.lg` — Expected: PASS.
+- [x] **Step 4: Run** — `lgx test test/rite/deps_test.lg` — Expected: PASS.
 
-- [ ] **Step 5: Commit** — `git commit -m "feat: add gitlibs dep fetching with transitive resolution"`
+- [x] **Step 5: Commit** — `git commit -m "feat: add gitlibs dep fetching with transitive resolution"`
+
+> Deviation: Dropped `resolve-head-sha!` (and its test) along with the let-go-source section — rite coords always pin `:git/sha`|`:git/tag`, so nothing follows HEAD. Dropped `merge-coords` (task `:deps` has nothing to merge over). `coords-at!` catches the `:rite/invalid-dep-config` marker (renamed from lgx's). `ensure-all!`/`print-installs!` are public; `coord-label`/`coord-id`/`coords-at!` private. `ensure-all!` transitive tests pre-populate the cache (no real git) — real cloning is exercised in the Task 10 e2e.
+>
+> Review notes (codex, both P2/advisory — NOT applied, needs human sign-off): (1) `:git/sha` is used verbatim as a cache dir segment, so a hostile own-config sha like `../../x` could traverse within `$LGX_HOME/gitlibs`; (2) `tag->ref` maps `release/1.0` and `release_1.0` to the same cache dir. Both are faithful ports of lgx `cache.lg`. Deliberately left unchanged: the plan requires an **lgx-identical coord grammar and a shared `$LGX_HOME` cache** ("deps fetched by either tool are reused"), and changing the sha/tag encoding would fork rite's cache layout from lgx's and break that sharing. Threat model is a malicious own-project config. Flagging for the human to decide whether to harden both tools together upstream.
 
 ### Task 7: `:run` script mode (self-exec) 
 

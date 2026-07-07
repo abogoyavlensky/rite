@@ -1,0 +1,153 @@
+(ns rite.script
+  (:require [rite.deps :as deps]
+            [rite.path :as path]
+            [string :as str]))
+
+;; --------------------------------------------------------------------------
+;; :run steps — the built-in let-go mechanism
+;;
+;; A :run step executes a let-go script with the task's dep basis, using rite
+;; itself as the runtime — no external `lg` required. The parent side
+;; (exec-run-step!) resolves the basis, sets LG_SOURCE_PATHS / LG_READ_CLJ /
+;; RITE_SCRIPT, and re-execs `(first os/args)` (the rite exe in a bundle, `lg`
+;; in dev). The child side (run-script!) runs when RITE_SCRIPT is set: it
+;; rebinds *command-line-args* and (load-string (slurp script)).
+;;
+;; Verified against let-go 1.11.1 (spike, 2026-07-07): in a bundled binary,
+;; set-read-clj!, alter-var-root of *command-line-args*, and load-string of a
+;; script that `require`s a namespace off LG_SOURCE_PATHS all work. NOTE:
+;; os/args is a VALUE (a vector, argv[0] = the executable), not a function —
+;; use `(first os/args)`, not `(first (os/args))`.
+;; --------------------------------------------------------------------------
+
+;; ---------------------------------------------------------------------------
+;; Pure helpers
+;; ---------------------------------------------------------------------------
+
+(defn script-mode?
+  "True when RITE_SCRIPT is set to a non-blank value. `getenv` maps a var name
+   to its value (pass os/getenv, or a fn in tests)."
+  [getenv]
+  (not (str/blank? (getenv "RITE_SCRIPT"))))
+
+(defn- position [v x]
+  (loop [i 0
+         xs (seq v)]
+    (cond
+      (nil? xs) -1
+      (= x (first xs)) i
+      :else (recur (inc i) (next xs)))))
+
+(defn- drop-arg-separator
+  "Remove the first `--` from an argv, leaving the rest (including any later
+   `--`) untouched. Like `lgx run`, a :run step must not pass the app-level
+   `--` through to the script's *command-line-args*."
+  [argv]
+  (let [dd (position argv "--")]
+    (if (neg? dd)
+      (vec argv)
+      (vec (concat (take dd argv) (drop (inc dd) argv))))))
+
+(defn- as-arg-vec [value]
+  (if (vector? value)
+    (vec value)
+    (vec (filter #(not (str/blank? %)) (str/split value #"\s+")))))
+
+(defn child-argv
+  "Turn an already-substituted :run step value into the child's argv: a vector
+   passes through, a string is whitespace-split; then the first `--` separator
+   is dropped. argv[0] is the script path, the rest its args."
+  [value]
+  (drop-arg-separator (as-arg-vec value)))
+
+(defn source-paths
+  "The LG_SOURCE_PATHS list for a :run child: the task's :paths absolutized
+   against `project` (each checked with `exists?`, `warn`ing when missing but
+   still included, mirroring lgx), followed by the resolved dep source dirs.
+   Returns a vector of absolute paths."
+  [project task-paths dep-paths exists? warn]
+  (vec (concat
+         (mapv (fn [p]
+                 (let [abs (path/join project p)]
+                   (when-not (exists? abs)
+                     (warn (str "warning: :paths entry not found: " p "\n")))
+                   abs))
+               task-paths)
+         dep-paths)))
+
+(defn source-paths-env
+  "Join source paths into the LG_SOURCE_PATHS value with os/path-separator."
+  [paths]
+  (str/join os/path-separator paths))
+
+(defn env-trace-line
+  "The verbose `+ env RITE_SCRIPT=1 LG_SOURCE_PATHS=... LG_READ_CLJ=1` line."
+  [source-paths-value]
+  (str "+ env RITE_SCRIPT=1 LG_SOURCE_PATHS=" source-paths-value
+       " LG_READ_CLJ=1\n"))
+
+(defn exec-trace-line
+  "The verbose `+ <exe> <argv...>` line."
+  [exe argv]
+  (str "+ " exe " " (str/join " " argv) "\n"))
+
+;; ---------------------------------------------------------------------------
+;; Child side: run in-process when RITE_SCRIPT is set
+;; ---------------------------------------------------------------------------
+
+(defn run-script!
+  "Child-side :run entry. os/args is [<exe> <script> <arg>...]: rebind
+   *command-line-args* to the script args (nil when empty, matching lg) and
+   evaluate the script in-process. Never returns — exits 0 on success, 1 on a
+   missing script or a thrown exception (message to *err*)."
+  []
+  (let [script (second os/args)
+        script-args (seq (drop 2 os/args))]
+    (when (str/blank? script)
+      (write! *err* "rite: no script given in script mode\n")
+      (os/exit 1))
+    (when-not (file-exists? script)
+      (write! *err* (str "rite: script not found: " script "\n"))
+      (os/exit 1))
+    (set-read-clj! true)
+    (alter-var-root (var *command-line-args*) (constantly script-args))
+    (try
+      (load-string (slurp script))
+      (os/exit 0)
+      (catch e
+             (do (write! *err* (str (ex-message e) "\n"))
+                 (os/exit 1))))))
+
+;; ---------------------------------------------------------------------------
+;; Parent side: resolve basis, set env, re-exec rite as the script child
+;; ---------------------------------------------------------------------------
+
+(defn exec-run-step!
+  "Run one :run step. Resolve the task's dep basis (fetch :deps transitively,
+   print installs), set RITE_SCRIPT / LG_SOURCE_PATHS / LG_READ_CLJ, re-exec
+   `(first os/args)` with `argv` (streaming stdio), then restore the three env
+   vars so a later :sh step doesn't inherit them. Returns the child's exit
+   code. `argv` is the child-argv (argv[0] = the script)."
+  [project task argv verbose?]
+  (let [dep-pairs (vec (:deps task))
+        results (deps/ensure-all! project dep-pairs)
+        dep-paths (mapv :path results)
+        paths (source-paths project (or (:paths task) []) dep-paths
+                            file-exists? (fn [m] (write! *err* m)))
+        sp-value (source-paths-env paths)
+        exe (first os/args)
+        prev-script (os/getenv "RITE_SCRIPT")
+        prev-sp (os/getenv "LG_SOURCE_PATHS")
+        prev-clj (os/getenv "LG_READ_CLJ")]
+    (deps/print-installs! results)
+    (when verbose?
+      (write! *err* (env-trace-line sp-value))
+      (write! *err* (exec-trace-line exe argv)))
+    (os/setenv "RITE_SCRIPT" "1")
+    (os/setenv "LG_SOURCE_PATHS" sp-value)
+    (os/setenv "LG_READ_CLJ" "1")
+    (let [exit (apply os/exec* exe argv)]
+      (os/setenv "RITE_SCRIPT" (or prev-script ""))
+      (os/setenv "LG_SOURCE_PATHS" (or prev-sp ""))
+      (os/setenv "LG_READ_CLJ" (or prev-clj ""))
+      exit)))

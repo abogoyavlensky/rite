@@ -1,0 +1,81 @@
+;; Unit tests for rite.script — the pure parts of :run script mode.
+;; The self-exec parent side (exec-run-step!) and child side (run-script!) are
+;; side-effectful (exec/exit) and covered by the e2e harness.
+;; Run with: lgx test  (from project root)
+
+(ns rite.script-test
+  (:require [clojure.test :refer [deftest is]]
+            [rite.script :as script]))
+
+;; ---------------------------------------------------------------------------
+;; script-mode?
+;; ---------------------------------------------------------------------------
+
+(deftest script-mode-true-when-set
+  (is (= true (script/script-mode? (fn [_] "1")))))
+
+(deftest script-mode-false-when-blank
+  (is (= false (script/script-mode? (fn [_] ""))))
+  (is (= false (script/script-mode? (fn [_] "   ")))))
+
+;; ---------------------------------------------------------------------------
+;; child-argv (string splits on whitespace; vector passes through; first -- dropped)
+;; ---------------------------------------------------------------------------
+
+(deftest child-argv-vector-passes-through
+  (is (= ["scripts/notify.lg" "prod"]
+         (script/child-argv ["scripts/notify.lg" "prod"]))))
+
+(deftest child-argv-string-splits-on-whitespace
+  (is (= ["scripts/notify.lg" "prod"]
+         (script/child-argv "scripts/notify.lg prod"))))
+
+(deftest child-argv-string-collapses-extra-whitespace
+  (is (= ["a" "b" "c"]
+         (script/child-argv "a   b\tc"))))
+
+(deftest child-argv-drops-first-separator
+  (is (= ["scripts/notify.lg" "prod"]
+         (script/child-argv ["scripts/notify.lg" "--" "prod"]))))
+
+(deftest child-argv-keeps-later-separator
+  (is (= ["s.lg" "a" "--" "b"]
+         (script/child-argv ["s.lg" "--" "a" "--" "b"]))))
+
+;; ---------------------------------------------------------------------------
+;; source-paths (task :paths absolutized against project ++ dep paths)
+;; ---------------------------------------------------------------------------
+
+(deftest source-paths-absolutizes-task-paths-then-deps
+  (is (= ["/proj/scripts" "/cache/dep-a/src"]
+         (script/source-paths "/proj" ["scripts"] ["/cache/dep-a/src"]
+                              (fn [_] true) (fn [_] nil)))))
+
+(deftest source-paths-no-task-paths-just-deps
+  (is (= ["/cache/dep-a/src" "/cache/dep-b"]
+         (script/source-paths "/proj" [] ["/cache/dep-a/src" "/cache/dep-b"]
+                              (fn [_] true) (fn [_] nil)))))
+
+(deftest source-paths-warns-but-keeps-missing-path
+  (let [warnings (atom [])
+        r (script/source-paths "/proj" ["missing"] []
+                               (fn [_] false)
+                               (fn [m] (swap! warnings conj m)))]
+    (is (= ["/proj/missing"] r))
+    (is (= 1 (count @warnings)))))
+
+(deftest source-paths-env-joins-with-path-separator
+  (is (= (str "/a" os/path-separator "/b")
+         (script/source-paths-env ["/a" "/b"]))))
+
+;; ---------------------------------------------------------------------------
+;; verbose trace lines
+;; ---------------------------------------------------------------------------
+
+(deftest env-trace-line-shows-three-vars
+  (is (= (str "+ env RITE_SCRIPT=1 LG_SOURCE_PATHS=/a:/b LG_READ_CLJ=1\n")
+         (script/env-trace-line "/a:/b"))))
+
+(deftest exec-trace-line-shows-exe-and-argv
+  (is (= "+ /usr/bin/rite s.lg prod\n"
+         (script/exec-trace-line "/usr/bin/rite" ["s.lg" "prod"]))))
