@@ -11,3 +11,4 @@ lsp/
 .env
 .nrepl-port
 .clj-pulse
+.tmp/
