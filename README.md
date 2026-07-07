@@ -47,6 +47,9 @@ error. An empty `{}` is valid.
  {fmt    {:doc "Format sources"
           :do {:sh "cljfmt fix"}}
 
+  lint   {:doc "Lint sources"
+          :do {:sh "clj-kondo --lint src"}}
+
   check  {:doc "All checks"
           :depends [fmt lint]}      ; aggregate task: :depends without :do
 
