@@ -10,3 +10,4 @@ lsp/
 .calva
 .env
 .nrepl-port
+.clj-pulse
