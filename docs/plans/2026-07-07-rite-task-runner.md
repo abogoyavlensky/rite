@@ -212,20 +212,22 @@ Note on lgx test sources: unit tests for ported modules start from the correspon
 - Create: `src/rite/args.lg`
 - Test: `test/rite/args_test.lg`
 
-- [ ] **Step 1: Write tests**
+- [x] **Step 1: Write tests**
   Start from `../lgx/test/lgx/args_test.lg` (bind-args arity/types/defaults, shell-quote, substitute, expand, signature, usage-line — usage says `rite`, not `lgx`). Add new cases:
   - `var-bindings`: `{:version "1.2.0"}` (keyword keys) → `{:var/version "1.2.0"}`.
   - `substitute` replaces `:var/<name>` items (quoted for `:sh`, verbatim otherwise); unbound `:var/*` throws like unbound `:arg/*`.
   - `expand` with merged bindings: `{{name}}` prefers `:arg/name` over `:var/name` when both exist; falls back to `:var/name`; unknown tokens pass through.
 
-- [ ] **Step 2: Run** — `lgx test test/rite/args_test.lg` — Expected: FAIL.
+- [x] **Step 2: Run** — `lgx test test/rite/args_test.lg` — Expected: FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
   Port `../lgx/lgx/args.lg`. Changes: `placeholder?` accepts namespace `"arg"` or `"var"`; add `var-bindings` (vars map → `:var/*`-keyed map of strings); `expand` lookup order `:arg/name` then `:var/name`. Callers pass one merged bindings map — `(merge (var-bindings vars) arg-bindings)` is NOT done here; add a tiny `task-bindings` fn `(fn [vars arg-bindings] (merge (var-bindings vars) arg-bindings))` so Task 5/8 agree on the shape.
 
-- [ ] **Step 4: Run** — `lgx test test/rite/args_test.lg` — Expected: PASS.
+- [x] **Step 4: Run** — `lgx test test/rite/args_test.lg` — Expected: PASS.
 
-- [ ] **Step 5: Commit** — `git commit -m "feat: add task args and vars binding/substitution"`
+- [x] **Step 5: Commit** — `git commit -m "feat: add task args and vars binding/substitution"`
+
+> Deviation: `var-bindings` tolerates `nil` (treats as `{}`) so callers needn't guard when a project omits `:vars`.
 
 ### Task 4: Config schema and validation
 

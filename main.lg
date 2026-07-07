@@ -1,8 +1,11 @@
-(ns rite.main
-  (:require [rite.core :as c]))
+(ns rite.main)
+
+;; Placeholder entry point. The real CLI dispatch (script mode, task running,
+;; help) is built in a later task; this stub only keeps the tree compiling and
+;; `lgx build` green while the supporting namespaces land.
 
 (defn- main []
-  (println (c/greet "let-go")))
+  (println "rite: not yet implemented"))
 
 ; Top-level forms run during AOT compilation too. Guard so `lg -b` doesn't
 ; execute the CLI while bundling.
