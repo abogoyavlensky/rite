@@ -317,24 +317,26 @@ Note on lgx test sources: unit tests for ported modules start from the correspon
 - Create: `src/rite/script.lg`
 - Test: `test/rite/script_test.lg`
 
-- [ ] **Step 1: Spike the mechanism (throwaway, do first)**
+- [x] **Step 1: Spike the mechanism (throwaway, do first)**
   Before writing tests, verify the child-side contract with the real runtime: build any tiny bundle (or use `lg -e`) and confirm (a) `(alter-var-root (var *command-line-args*) (constantly '("x")))` works, (b) `load-string` of a script with `(ns t (:require ...))` resolves a namespace from `LG_SOURCE_PATHS` in a bundled binary, (c) `set-read-clj!` is callable. Record any deviation in the module's header comment and adapt. This de-risks the whole design; if (a) fails, fall back to passing args through a `RITE_SCRIPT_ARGS` env var read by the script-mode child — but verify first.
 
-- [ ] **Step 2: Write tests for the pure parts**
+- [x] **Step 2: Write tests for the pure parts**
   - `script-mode?`: true iff `RITE_SCRIPT` env non-blank (pass lookup fn for testability).
   - `child-argv`: from a substituted `:run` step value → argv with first `--` dropped (port `drop-arg-separator` + `as-arg-vec` behavior from `../lgx/lgx/runner.lg` / `tasks.lg`: string splits on whitespace after expansion; vector passes through).
   - `source-paths`: project root + task `:paths` (absolutized against project, warn-on-missing like lgx `resolve-project-paths`) ++ dep result paths, joined with `os/path-separator` for the env value.
   - `verbose` trace lines: `+ env RITE_SCRIPT=1 LG_SOURCE_PATHS=... LG_READ_CLJ=1` and `+ <exe> <argv>`.
 
-- [ ] **Step 3: Run** — `lgx test test/rite/script_test.lg` — Expected: FAIL.
+- [x] **Step 3: Run** — `lgx test test/rite/script_test.lg` — Expected: FAIL.
 
-- [ ] **Step 4: Implement**
+- [x] **Step 4: Implement**
   - `run-script!` (child side): take raw `(os/args)`; script = second element, script-args = rest. `(set-read-clj! true)`; `alter-var-root` `*command-line-args*` to a seq of script-args or nil; `(load-string (slurp script))` in try/catch → on exception write `ex-message` to stderr, `(os/exit 1)`; else `(os/exit 0)`. Missing script file → clear error, exit 1.
   - `exec-run-step!` (parent side): resolve basis (call `deps/ensure-all!` on the task's `:deps` pairs, print installs), set the three env vars, `(os/exec* (first (os/args)) & argv)`, restore prior env values, return exit code.
 
-- [ ] **Step 5: Run** — `lgx test test/rite/script_test.lg` — Expected: PASS.
+- [x] **Step 5: Run** — `lgx test test/rite/script_test.lg` — Expected: PASS.
 
-- [ ] **Step 6: Commit** — `git commit -m "feat: add self-exec script mode for :run steps"`
+- [x] **Step 6: Commit** — `git commit -m "feat: add self-exec script mode for :run steps"`
+
+> Deviation / SPIKE RESULT (verified against let-go 1.11.1, 2026-07-07): the whole self-exec mechanism works in a **bundled** binary — `set-read-clj!`, `alter-var-root` of `*command-line-args*`, and `load-string` of a script that `require`s a namespace off `LG_SOURCE_PATHS` all succeed (proven with a throwaway `lg -b` bundle). One correction to the plan: **`os/args` is a VALUE (vector, argv[0] = exe), not a function** — the parent side uses `(first os/args)`, not `(first (os/args))`. `source-paths` takes injected `exists?`/`warn` fns for pure testability. `set-read-clj!` added to the clj-kondo builtins exclude.
 
 ### Task 8: Task execution
 

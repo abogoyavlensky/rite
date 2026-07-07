@@ -1,0 +1,99 @@
+(ns rite.tasks
+  (:require [rite.args :as args]
+            [rite.script :as script]
+            [rite.style :as style]
+            [string :as str]))
+
+;; --------------------------------------------------------------------------
+;; Task execution over a plan
+;;
+;; run-plan! runs each entry of a plan/build-plan result in order. Each entry
+;; is {:name :task :bindings}: its :do steps run sequentially, and the first
+;; non-zero exit stops the whole run with that code. A :depends-only task (no
+;; :do) prints its header and runs nothing.
+;;
+;; Unlike lgx (which buffers via os/sh and replays), rite streams: :sh steps
+;; run as (os/exec* "sh" "-c" cmd) and :run steps re-exec rite itself, both
+;; inheriting stdio — so output is live and interactive programs work.
+;;
+;; A step value may reference the task's bound arg+var values two ways:
+;;   - :arg/<name> / :var/<name> items in a vector, replaced whole:
+;;     shell-quoted for :sh, verbatim for :run.
+;;   - {{<name>}} tokens in any string, spliced raw (args shadow vars); unknown
+;;     tokens pass through. A :run string is expanded then whitespace-split.
+;; --------------------------------------------------------------------------
+
+(defn- as-string [value]
+  (if (vector? value) (str/join " " value) value))
+
+(defn- substituted [value bindings quote?]
+  (if (vector? value)
+    (args/substitute (mapv #(if (string? %) (args/expand % bindings) %) value)
+                     bindings quote?)
+    (args/expand value bindings)))
+
+(defn sh-command
+  "The final `sh -c` command string for a :sh step value: vector items are
+   substituted (shell-quoted) and joined with spaces; a string is
+   {{...}}-expanded."
+  [value bindings]
+  (as-string (substituted value bindings true)))
+
+(defn run-argv
+  "The child argv for a :run step value: substituted verbatim (no quoting),
+   a string whitespace-split, and the first `--` separator dropped."
+  [value bindings]
+  (script/child-argv (substituted value bindings false)))
+
+(defn- run-sh-step! [value bindings verbose?]
+  (let [cmd (sh-command value bindings)]
+    (write! *err* (str "\n" (style/step-line cmd) "\n"))
+    (when verbose?
+      (write! *err* (str "+ sh -c " cmd "\n")))
+    (os/exec* "sh" "-c" cmd)))
+
+(defn- run-run-step! [value bindings sp-value verbose?]
+  (let [argv (run-argv value bindings)]
+    (write! *err* (str "\n" (style/step-line (str/join " " argv)) "\n"))
+    (script/exec-script! sp-value argv verbose?)))
+
+(defn- run-step! [step bindings sp-value verbose?]
+  (cond
+    (contains? step :sh) (run-sh-step! (:sh step) bindings verbose?)
+    (contains? step :run) (run-run-step! (:run step) bindings sp-value verbose?)
+    :else (throw (ex-info "step has no action key" {:step step}))))
+
+(defn- has-run-step? [task]
+  (some #(contains? % :run) (or (:do task) [])))
+
+(defn- run-entry!
+  "Run one plan entry's :do steps in order. Resolves the :run basis once (only
+   when the task has a :run step). Returns the first non-zero step exit, or 0."
+  [entry project verbose?]
+  (let [name (:name entry)
+        task (:task entry)
+        bindings (:bindings entry)
+        sp-value (when (has-run-step? task)
+                   (script/resolve-basis! project task))]
+    (write! *err* (str (style/task-header name) "\n"))
+    (loop [steps (or (:do task) [])]
+      (if (empty? steps)
+        0
+        (let [exit (run-step! (first steps) bindings sp-value verbose?)]
+          (if (zero? exit)
+            (recur (rest steps))
+            exit))))))
+
+(defn run-plan!
+  "Run each entry of `plan` (a plan/build-plan :plan vector) in order. The
+   first non-zero step exit stops the run and exits with that code; otherwise
+   exits 0 after the last entry. `project` is the root dir, used to resolve any
+   :run step's dep basis. Never returns."
+  [plan project verbose?]
+  (loop [entries plan]
+    (if (empty? entries)
+      (os/exit 0)
+      (let [exit (run-entry! (first entries) project verbose?)]
+        (if (zero? exit)
+          (recur (rest entries))
+          (os/exit exit))))))

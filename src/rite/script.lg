@@ -122,24 +122,31 @@
 ;; Parent side: resolve basis, set env, re-exec rite as the script child
 ;; ---------------------------------------------------------------------------
 
-(defn exec-run-step!
-  "Run one :run step. Resolve the task's dep basis (fetch :deps transitively,
-   print installs), set RITE_SCRIPT / LG_SOURCE_PATHS / LG_READ_CLJ, re-exec
-   `(first os/args)` with `argv` (streaming stdio), then restore the three env
-   vars so a later :sh step doesn't inherit them. Returns the child's exit
-   code. `argv` is the child-argv (argv[0] = the script)."
-  [project task argv verbose?]
+(defn resolve-basis!
+  "Resolve a task's :run basis once per task: fetch its :deps transitively
+   (printing any installs) and compute the LG_SOURCE_PATHS value from the
+   task's :paths (absolutized against `project`) ++ the dep source dirs.
+   Returns the source-paths string."
+  [project task]
   (let [dep-pairs (vec (:deps task))
         results (deps/ensure-all! project dep-pairs)
         dep-paths (mapv :path results)
         paths (source-paths project (or (:paths task) []) dep-paths
-                            file-exists? (fn [m] (write! *err* m)))
-        sp-value (source-paths-env paths)
-        exe (first os/args)
+                            file-exists? (fn [m] (write! *err* m)))]
+    (deps/print-installs! results)
+    (source-paths-env paths)))
+
+(defn exec-script!
+  "Run one :run step's `argv` as the script child under `sp-value`: set
+   RITE_SCRIPT / LG_SOURCE_PATHS / LG_READ_CLJ, re-exec `(first os/args)` with
+   `argv` (streaming stdio), then restore the three env vars so a later :sh
+   step doesn't inherit them. Returns the child's exit code. `argv` is the
+   child-argv (argv[0] = the script)."
+  [sp-value argv verbose?]
+  (let [exe (first os/args)
         prev-script (os/getenv "RITE_SCRIPT")
         prev-sp (os/getenv "LG_SOURCE_PATHS")
         prev-clj (os/getenv "LG_READ_CLJ")]
-    (deps/print-installs! results)
     (when verbose?
       (write! *err* (env-trace-line sp-value))
       (write! *err* (exec-trace-line exe argv)))

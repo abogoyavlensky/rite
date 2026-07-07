@@ -1,0 +1,53 @@
+;; Unit tests for rite.tasks — pure step-value preparation. The side-effectful
+;; run-plan!/run-step! (streaming, os/exec*, os/exit) are covered by the e2e.
+;; Run with: lgx test  (from project root)
+
+(ns rite.tasks-test
+  (:require [clojure.test :refer [deftest is]]
+            [rite.tasks :as tasks]))
+
+;; ---------------------------------------------------------------------------
+;; sh-command — the final `sh -c` string (vector joined, values shell-quoted)
+;; ---------------------------------------------------------------------------
+
+(deftest sh-command-string-expands-templates
+  (is (= "released hi"
+         (tasks/sh-command "released {{msg}}" {:arg/msg "hi"}))))
+
+(deftest sh-command-string-expands-var-template
+  (is (= "echo 1.2.0"
+         (tasks/sh-command "echo {{version}}" {:var/version "1.2.0"}))))
+
+(deftest sh-command-vector-quotes-arg
+  (is (= "./deploy.sh 'prod'"
+         (tasks/sh-command ["./deploy.sh" :arg/env] {:arg/env "prod"}))))
+
+(deftest sh-command-vector-quotes-var-with-spaces
+  (is (= "echo '1 2 0'"
+         (tasks/sh-command ["echo" :var/version] {:var/version "1 2 0"}))))
+
+(deftest sh-command-vector-mixes-arg-and-var
+  (is (= "run 'prod' '1.2.0'"
+         (tasks/sh-command ["run" :arg/env :var/version]
+                           {:arg/env "prod"
+                            :var/version "1.2.0"}))))
+
+;; ---------------------------------------------------------------------------
+;; run-argv — the child argv (verbatim, no quoting; first -- dropped)
+;; ---------------------------------------------------------------------------
+
+(deftest run-argv-string-splits-after-expansion
+  (is (= ["scripts/notify.lg" "prod"]
+         (tasks/run-argv "scripts/notify.lg {{env}}" {:arg/env "prod"}))))
+
+(deftest run-argv-vector-substitutes-verbatim
+  (is (= ["scripts/notify.lg" "prod"]
+         (tasks/run-argv ["scripts/notify.lg" :arg/env] {:arg/env "prod"}))))
+
+(deftest run-argv-vector-var-verbatim
+  (is (= ["echo" "1.2.0"]
+         (tasks/run-argv ["echo" :var/version] {:var/version "1.2.0"}))))
+
+(deftest run-argv-drops-first-separator
+  (is (= ["s.lg" "prod"]
+         (tasks/run-argv ["s.lg" "--" :arg/env] {:arg/env "prod"}))))
