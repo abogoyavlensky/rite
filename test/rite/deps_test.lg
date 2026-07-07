@@ -1,0 +1,286 @@
+;; Unit tests for rite.deps — URL parsing, coord-dir, ensure-lib! cached path,
+;; and ensure-all! transitive resolution.
+;; Run with: lgx test  (from project root)
+
+(ns rite.deps-test
+  (:require [clojure.test :refer [deftest is]]
+            [rite.deps :as deps]))
+
+(defn- threw? [f]
+  (try (f) :no-throw (catch e :threw)))
+
+;; ---------------------------------------------------------------------------
+;; parse-git-url
+;; ---------------------------------------------------------------------------
+
+(deftest parse-git-url-https-plain
+  (is (= ["github.com" "nooga" "let-go"]
+         (deps/parse-git-url "https://github.com/nooga/let-go"))))
+
+(deftest parse-git-url-strips-dotgit
+  (is (= ["github.com" "nooga" "let-go"]
+         (deps/parse-git-url "https://github.com/nooga/let-go.git"))))
+
+(deftest parse-git-url-accepts-http-scheme
+  (is (= ["example.com" "owner" "repo"]
+         (deps/parse-git-url "http://example.com/owner/repo"))))
+
+(deftest parse-git-url-file-uri-derives-local-host
+  (is (= ["_local" "_" "foo"]
+         (deps/parse-git-url "file:///tmp/foo.git")))
+  (is (= ["_local" "_" "bar"]
+         (deps/parse-git-url "file:///tmp/rite-test/bar"))))
+
+(deftest parse-git-url-rejects-ssh-form
+  (is (= :threw (threw? #(deps/parse-git-url "git@github.com:owner/repo.git")))))
+
+(deftest parse-git-url-rejects-malformed
+  (is (= :threw (threw? #(deps/parse-git-url "not-a-url"))))
+  (is (= :threw (threw? #(deps/parse-git-url "https://only-host")))))
+
+;; ---------------------------------------------------------------------------
+;; coord-dir
+;; ---------------------------------------------------------------------------
+
+(deftest coord-dir-assembles-path
+  (os/setenv "RITE_HOME" "/tmp/rite-cache-test-home")
+  (is (= "/tmp/rite-cache-test-home/gitlibs/github.com/nooga/let-go/abc123"
+         (deps/coord-dir "https://github.com/nooga/let-go" "abc123"))))
+
+(deftest coord-dir-handles-dotgit-and-file-uri
+  (os/setenv "RITE_HOME" "/tmp/rite-cache-test-home")
+  (is (= "/tmp/rite-cache-test-home/gitlibs/github.com/nooga/let-go/sha1"
+         (deps/coord-dir "https://github.com/nooga/let-go.git" "sha1")))
+  (is (= "/tmp/rite-cache-test-home/gitlibs/_local/_/myrepo/sha2"
+         (deps/coord-dir "file:///tmp/scratch/myrepo.git" "sha2"))))
+
+;; ---------------------------------------------------------------------------
+;; ensure-lib! cached path
+;; ---------------------------------------------------------------------------
+
+(deftest ensure-lib-returns-installed-false-when-cached
+  (let [home (str "/tmp/rite-ensure-test-" (rand-int 100000000))
+        sha "0000000000000000000000000000000000000000"
+        url "https://github.com/example/cached"
+        dir (str home "/gitlibs/github.com/example/cached/" sha)
+        src-dir (str dir "/src")]
+    (os/setenv "RITE_HOME" home)
+    (mkdir src-dir)
+    (is (= {:path src-dir
+            :installed? false
+            :dir dir}
+           (deps/ensure-lib! {:git/url url
+                              :git/sha sha}
+                             "/tmp/project")))
+    (os/sh "rm" "-rf" home)))
+
+(deftest ensure-lib-returns-installed-false-when-cached-no-src
+  (let [home (str "/tmp/rite-ensure-test-" (rand-int 100000000))
+        sha "1111111111111111111111111111111111111111"
+        url "https://github.com/example/nosrc"
+        dir (str home "/gitlibs/github.com/example/nosrc/" sha)]
+    (os/setenv "RITE_HOME" home)
+    (mkdir dir)
+    (is (= {:path dir
+            :installed? false
+            :dir dir}
+           (deps/ensure-lib! {:git/url url
+                              :git/sha sha}
+                             "/tmp/project")))
+    (os/sh "rm" "-rf" home)))
+
+(deftest ensure-lib-caches-tag-by-name
+  (let [home (str "/tmp/rite-ensure-test-" (rand-int 100000000))
+        tag "v1.0.0"
+        url "file:///tmp/rite-missing-tag-repo"
+        dir (str home "/gitlibs/_local/_/rite-missing-tag-repo/" tag)
+        src-dir (str dir "/src")]
+    (os/setenv "RITE_HOME" home)
+    (mkdir src-dir)
+    (is (= {:path src-dir
+            :installed? false
+            :dir dir}
+           (deps/ensure-lib! {:git/url url
+                              :git/tag tag}
+                             "/tmp/project")))
+    (os/sh "rm" "-rf" home)))
+
+(deftest ensure-lib-sanitizes-slash-in-tag
+  (let [home (str "/tmp/rite-ensure-test-" (rand-int 100000000))
+        tag "release/1.0"
+        url "file:///tmp/rite-missing-release-repo"
+        dir (str home "/gitlibs/_local/_/rite-missing-release-repo/release_1.0")]
+    (os/setenv "RITE_HOME" home)
+    (mkdir dir)
+    (is (= {:path dir
+            :installed? false
+            :dir dir}
+           (deps/ensure-lib! {:git/url url
+                              :git/tag tag}
+                             "/tmp/project")))
+    (os/sh "rm" "-rf" home)))
+
+(deftest ensure-lib-uses-deps-root-when-set
+  (let [home (str "/tmp/rite-ensure-test-" (rand-int 100000000))
+        sha "2222222222222222222222222222222222222222"
+        url "https://github.com/example/customroot"
+        dir (str home "/gitlibs/github.com/example/customroot/" sha)
+        root-dir (str dir "/src/main/clojure")]
+    (os/setenv "RITE_HOME" home)
+    (mkdir root-dir)
+    (is (= {:path root-dir
+            :installed? false
+            :dir dir}
+           (deps/ensure-lib! {:git/url url
+                              :git/sha sha
+                              :deps/root "src/main/clojure"}
+                             "/tmp/project")))
+    (os/sh "rm" "-rf" home)))
+
+(deftest ensure-lib-throws-when-deps-root-missing
+  (let [home (str "/tmp/rite-ensure-test-" (rand-int 100000000))
+        sha "3333333333333333333333333333333333333333"
+        url "https://github.com/example/missingroot"
+        dir (str home "/gitlibs/github.com/example/missingroot/" sha)]
+    (os/setenv "RITE_HOME" home)
+    (mkdir dir)
+    (is (= :threw (threw? #(deps/ensure-lib! {:git/url url
+                                              :git/sha sha
+                                              :deps/root "nope/missing"}
+                                             "/tmp/project"))))
+    (os/sh "rm" "-rf" home)))
+
+(deftest ensure-lib-normalizes-trailing-slash
+  (let [home (str "/tmp/rite-ensure-test-" (rand-int 100000000))
+        sha "4444444444444444444444444444444444444444"
+        url "https://github.com/example/trailing"
+        dir (str home "/gitlibs/github.com/example/trailing/" sha)
+        root-dir (str dir "/lib/core")]
+    (os/setenv "RITE_HOME" home)
+    (mkdir root-dir)
+    (is (= {:path root-dir
+            :installed? false
+            :dir dir}
+           (deps/ensure-lib! {:git/url url
+                              :git/sha sha
+                              :deps/root "lib/core/"}
+                             "/tmp/project")))
+    (os/sh "rm" "-rf" home)))
+
+(deftest ensure-lib-resolves-relative-local-root
+  (let [project (str "/tmp/rite-local-test-" (rand-int 100000000))
+        src-dir (str project "/lib/src")]
+    (mkdir src-dir)
+    (is (= {:path src-dir
+            :installed? false
+            :dir (str project "/lib")}
+           (deps/ensure-lib! {:local/root "lib"} project)))
+    (os/sh "rm" "-rf" project)))
+
+(deftest ensure-lib-resolves-absolute-local-root
+  (let [dir (str "/tmp/rite-abs-local-test-" (rand-int 100000000))
+        src-dir (str dir "/src")]
+    (mkdir src-dir)
+    (is (= {:path src-dir
+            :installed? false
+            :dir dir}
+           (deps/ensure-lib! {:local/root dir} "/tmp/project")))
+    (os/sh "rm" "-rf" dir)))
+
+(deftest ensure-lib-applies-deps-root-on-local
+  (let [project (str "/tmp/rite-local-root-test-" (rand-int 100000000))
+        root-dir (str project "/lib/src/main")]
+    (mkdir root-dir)
+    (is (= {:path root-dir
+            :installed? false
+            :dir (str project "/lib")}
+           (deps/ensure-lib! {:local/root "lib"
+                              :deps/root "src/main"}
+                             project)))
+    (os/sh "rm" "-rf" project)))
+
+(deftest ensure-lib-local-throws-when-base-missing
+  (let [project (str "/tmp/rite-local-missing-test-" (rand-int 100000000))]
+    (is (= :threw (threw? #(deps/ensure-lib! {:local/root "./nope"}
+                                             project))))))
+
+(deftest ensure-lib-local-uses-dir-when-no-src
+  (let [project (str "/tmp/rite-local-nosrc-test-" (rand-int 100000000))
+        dir (str project "/lib")]
+    (mkdir dir)
+    (is (= {:path dir
+            :installed? false
+            :dir dir}
+           (deps/ensure-lib! {:local/root "lib"} project)))
+    (os/sh "rm" "-rf" project)))
+
+;; ---------------------------------------------------------------------------
+;; ensure-all! transitive resolution (cache pre-populated so no cloning)
+;; ---------------------------------------------------------------------------
+
+(deftest ensure-all-resolves-transitive-deps
+  (let [home (str "/tmp/rite-ensure-all-test-" (rand-int 100000000))
+        sha-a "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        sha-b "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        dir-a (str home "/gitlibs/github.com/ex/a/" sha-a)
+        dir-b (str home "/gitlibs/github.com/ex/b/" sha-b)]
+    (os/setenv "RITE_HOME" home)
+    (mkdir (str dir-a "/src"))
+    (mkdir (str dir-b "/src"))
+    ;; a's own lgx.edn declares b as a transitive dep
+    (spit (str dir-a "/lgx.edn")
+          (str "{:deps {ex/b {:git/url \"https://github.com/ex/b\""
+               " :git/sha \"" sha-b "\"}}}"))
+    (let [results (deps/ensure-all! "/tmp/project"
+                                    [['ex/a {:git/url "https://github.com/ex/a"
+                                             :git/sha sha-a}]])]
+      (is (= ['ex/a 'ex/b] (mapv :lib results)))
+      (is (every? #(= false (:installed? %)) results)))
+    (os/sh "rm" "-rf" home)))
+
+(deftest ensure-all-first-wins-on-conflict
+  ;; project pins ex/b@sha1; dep ex/a's lgx.edn pins ex/b@sha2 -> sha1 wins,
+  ;; ex/b appears once.
+  (let [home (str "/tmp/rite-ensure-all-test-" (rand-int 100000000))
+        sha-a "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        sha-b1 "1111111111111111111111111111111111111111"
+        sha-b2 "2222222222222222222222222222222222222222"
+        dir-a (str home "/gitlibs/github.com/ex/a/" sha-a)
+        dir-b1 (str home "/gitlibs/github.com/ex/b/" sha-b1)]
+    (os/setenv "RITE_HOME" home)
+    (mkdir (str dir-a "/src"))
+    (mkdir (str dir-b1 "/src"))
+    (spit (str dir-a "/lgx.edn")
+          (str "{:deps {ex/b {:git/url \"https://github.com/ex/b\""
+               " :git/sha \"" sha-b2 "\"}}}"))
+    (let [results (deps/ensure-all! "/tmp/project"
+                                    [['ex/a {:git/url "https://github.com/ex/a"
+                                             :git/sha sha-a}]
+                                     ['ex/b {:git/url "https://github.com/ex/b"
+                                             :git/sha sha-b1}]])]
+      (is (= ['ex/a 'ex/b] (mapv :lib results)))
+      (is (= (str dir-b1 "/src")
+             (:path (first (filter #(= 'ex/b (:lib %)) results))))))
+    (os/sh "rm" "-rf" home)))
+
+(deftest ensure-all-terminates-on-cycle
+  ;; a -> b -> a : the seen set breaks the cycle.
+  (let [home (str "/tmp/rite-ensure-all-test-" (rand-int 100000000))
+        sha-a "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        sha-b "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        dir-a (str home "/gitlibs/github.com/ex/a/" sha-a)
+        dir-b (str home "/gitlibs/github.com/ex/b/" sha-b)]
+    (os/setenv "RITE_HOME" home)
+    (mkdir (str dir-a "/src"))
+    (mkdir (str dir-b "/src"))
+    (spit (str dir-a "/lgx.edn")
+          (str "{:deps {ex/b {:git/url \"https://github.com/ex/b\""
+               " :git/sha \"" sha-b "\"}}}"))
+    (spit (str dir-b "/lgx.edn")
+          (str "{:deps {ex/a {:git/url \"https://github.com/ex/a\""
+               " :git/sha \"" sha-a "\"}}}"))
+    (let [results (deps/ensure-all! "/tmp/project"
+                                    [['ex/a {:git/url "https://github.com/ex/a"
+                                             :git/sha sha-a}]])]
+      (is (= ['ex/a 'ex/b] (mapv :lib results))))
+    (os/sh "rm" "-rf" home)))

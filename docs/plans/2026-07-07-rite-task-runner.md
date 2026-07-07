@@ -264,7 +264,7 @@ Note on lgx test sources: unit tests for ported modules start from the correspon
 - Modify: `src/rite/config.lg` (root-level `:depends` cross-checks)
 - Test: `test/rite/plan_test.lg`, extend `test/rite/config_test.lg`
 
-- [ ] **Step 1: Write tests**
+- [x] **Step 1: Write tests**
   Config cross-checks (load-time, in `config_test.lg`):
   - `:depends` entry naming an unknown task → error listing defined tasks.
   - Entry-item placeholders: `:arg/x` must be declared by the *parent* task, `:var/x` by `:vars`.
@@ -278,14 +278,16 @@ Note on lgx test sources: unit tests for ported modules start from the correspon
   ```
   Cases: no depends → single entry; chain order (depth-first, listed order, deps before dependents); diamond `d → [b c]`, `b → a`, `c → a` runs `a` once; same dep with *different* resolved args runs twice; arg forwarding (`[notify :arg/env]` with root bound `env=prod` → notify's bindings have `:arg/env "prod"`); `{{var}}` in dep-entry strings expands from vars+parent args; dep's own `:args` defaults fill; bad runtime value (enum mismatch via forwarded arg) → `:errors`.
 
-- [ ] **Step 2: Run** — `lgx test` — Expected: FAIL on new tests.
+- [x] **Step 2: Run** — `lgx test` — Expected: FAIL on new tests.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
   `plan.lg` is pure (no I/O). Resolve one entry: symbol → `[sym []]`; vector → substitute items against parent bindings (`args/substitute` verbatim mode + `args/expand` for strings), then `args/bind-args` against the dep task's decls, then `args/task-bindings` with vars. Dedup key `[name resolved-arg-strings]`; post-order DFS; collect errors with the referencing task named. Config cross-checks reuse the same entry-resolution helpers for the literal checks; cycle detection is a plain DFS over `{task → dep-names}` in config.lg.
 
-- [ ] **Step 4: Run** — `lgx test` — Expected: PASS.
+- [x] **Step 4: Run** — `lgx test` — Expected: PASS.
 
-- [ ] **Step 5: Commit** — `git commit -m "feat: add :depends validation and execution planning"`
+- [x] **Step 5: Commit** — `git commit -m "feat: add :depends validation and execution planning"`
+
+> Deviation: `depends-refs-errors` / `depends-cycle-errors` implemented directly in config.lg (not sharing plan.lg's entry-resolution) — the literal check only needs `args/bind-args` on plain string items, so config.lg gained a `[rite.args :as args]` require. `entry-value-checkable?` treats a `{{...}}` string as non-checkable (lenient), matching the "only keyword placeholders validated at load" rule. Cycle-error message path/order depends on map key order, so the mutual-cycle test asserts loosely (contains "dependency cycle" + both task names); self-cycle is deterministic. Root `:and` order is map → placeholder-refs → depends-refs → cycle, so cycle detection only runs once all `:depends` targets are known-defined.
 
 ### Task 6: Deps fetching (gitlibs cache + transitive resolution)
 

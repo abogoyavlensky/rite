@@ -1,0 +1,237 @@
+(ns rite.deps
+  (:require [rite.config :as config]
+            [rite.home :as home]
+            [rite.path :as path]
+            [string :as str]))
+
+;; ---------------------------------------------------------------------------
+;; Cache layout
+;;
+;; <home>/gitlibs/<host>/<owner>/<repo>/<ref>/  (home = rite.home/root, shared
+;; with lgx by default)
+;;
+;; Each leaf is a checked-out worktree pinned to a ref: a full sha for
+;; :git/sha coords, or a sanitized tag name for :git/tag coords. The directory
+;; itself is what we add to LG_SOURCE_PATHS, so namespaces in the lib resolve
+;; relative to the repo root.
+;; ---------------------------------------------------------------------------
+
+(defn- gitlibs-root []
+  (path/join (home/root) "gitlibs"))
+
+;; Parse a git URL into ["host" "owner" "repo"] used as the cache key.
+;; Supported forms:
+;;   https://host/owner/repo[.git] → ["host" "owner" "repo"]
+;;   file:///abs/path/to/repo[.git] → ["_local" "_" "repo"]
+;; SSH URLs (git@host:owner/repo) are not supported.
+(defn parse-git-url [url]
+  (let [stripped (if (str/ends-with? url ".git")
+                   (subs url 0 (- (count url) 4))
+                   url)]
+    (cond
+      (str/starts-with? stripped "file://")
+      (let [path (subs stripped 7)
+            slash (str/last-index-of path "/")
+            basename (if (nil? slash) path (subs path (inc slash)))]
+        (when (str/blank? basename)
+          (throw (ex-info (str "unsupported git url: " url) {:url url})))
+        ["_local" "_" basename])
+
+      :else
+      (let [m (re-find #"^https?://([^/]+)/([^/]+)/([^/]+)$" stripped)]
+        (when (nil? m)
+          (throw (ex-info (str "unsupported git url: " url) {:url url})))
+        (rest m)))))
+
+(defn- tag->ref [tag]
+  (str/replace tag "/" "_"))
+
+(defn coord-dir [url ref]
+  (let [[host owner repo] (parse-git-url url)]
+    (path/join (gitlibs-root) host owner repo ref)))
+
+;; ---------------------------------------------------------------------------
+;; Git wrappers (shell out via os/sh; capture is fine for these short ops)
+;; ---------------------------------------------------------------------------
+
+(defn- git! [args fail-msg]
+  (let [r (apply os/sh "git" args)]
+    (when-not (zero? (:exit r))
+      (throw (ex-info (str fail-msg ": " (:err r))
+                      {:exit (:exit r)
+                       :stderr (:err r)})))
+    r))
+
+(defn- finalize-worktree! [tmp dest]
+  ;; Drop the .git dir - we don't need history once the ref is checked out.
+  (let [r (os/sh "rm" "-rf" (path/join tmp ".git"))]
+    (when-not (zero? (:exit r))
+      (throw (ex-info "failed to remove .git from worktree"
+                      {:dir tmp
+                       :stderr (:err r)}))))
+  (let [r (os/sh "mv" tmp dest)]
+    (when-not (zero? (:exit r))
+      (throw (ex-info "failed to finalize worktree"
+                      {:from tmp
+                       :to dest
+                       :stderr (:err r)})))))
+
+(defn- clone-sha! [url sha dest]
+  ;; Use a tmp dir as parent for atomicity, then rename.
+  (let [parent (path/parent dest)
+        tmp (str dest ".tmp." (rand-int 1000000))]
+    (mkdir parent)
+    (git! ["clone" "--quiet" url tmp]
+          (str "git clone failed: " url))
+    (git! ["-C" tmp "checkout" "--quiet" sha]
+          (str "git checkout failed: " sha))
+    (finalize-worktree! tmp dest)))
+
+(defn- clone-tag! [url tag dest]
+  ;; Use a tmp dir as parent for atomicity, then rename.
+  (let [parent (path/parent dest)
+        tmp (str dest ".tmp." (rand-int 1000000))]
+    (mkdir parent)
+    (git! ["clone" "--quiet" "--branch" tag "--depth" "1" url tmp]
+          (str "git clone failed: " url))
+    (finalize-worktree! tmp dest)))
+
+;; ---------------------------------------------------------------------------
+;; Source path resolution
+;; ---------------------------------------------------------------------------
+
+(defn- resolve-source-path [dir root url ref]
+  (if root
+    ;; :deps/root overrides the default probe. Path is used verbatim;
+    ;; the directory must exist after clone, else hard error.
+    (let [resolved (path/join dir root)]
+      (when-not (file-exists? resolved)
+        (throw (ex-info (str ":deps/root " root " not found in " url)
+                        {:url url
+                         :ref ref
+                         :root root
+                         :resolved resolved})))
+      resolved)
+    ;; Convention: if the lib has a src/ dir, that's where namespaces live
+    ;; (matches tools.deps default :paths ["src"]). Otherwise use the repo root.
+    (let [src (path/join dir "src")]
+      (if (file-exists? src) src dir))))
+
+(defn- resolve-local-base [project local]
+  (if (str/starts-with? local "/")
+    local
+    (path/join project local)))
+
+;; ---------------------------------------------------------------------------
+;; Public API
+;; ---------------------------------------------------------------------------
+
+(defn ensure-lib!
+  "Fetch the coord into the gitlibs cache if missing. Returns
+   {:path <source dir> :dir <checkout root> :installed? <true if this call
+   cloned>}. :path is what goes on LG_SOURCE_PATHS (honoring :deps/root); :dir
+   is the repo/local root, where the dep's own lgx.edn lives (used for
+   transitive resolution)."
+  [coord project]
+  (let [root (:deps/root coord)
+        local (:local/root coord)]
+    (if local
+      (let [dir (resolve-local-base project local)]
+        (when-not (file-exists? dir)
+          (throw (ex-info (str ":local/root " local " not found")
+                          {:local local
+                           :resolved dir})))
+        {:path (resolve-source-path dir root local nil)
+         :dir dir
+         :installed? false})
+      (let [url (:git/url coord)
+            sha (:git/sha coord)
+            tag (:git/tag coord)
+            ref (or sha (tag->ref tag))
+            dir (coord-dir url ref)
+            installed? (not (file-exists? dir))]
+        (when installed?
+          (if sha
+            (clone-sha! url sha dir)
+            (clone-tag! url tag dir)))
+        {:path (resolve-source-path dir root url ref)
+         :dir dir
+         :installed? installed?}))))
+
+;; ---------------------------------------------------------------------------
+;; Transitive resolution
+;; ---------------------------------------------------------------------------
+
+(defn- coord-label [c]
+  (cond
+    (:local/root c) (str "local:" (:local/root c))
+    (:git/sha c) (str (:git/url c) "@" (:git/sha c))
+    (:git/tag c) (str (:git/url c) "#" (:git/tag c))
+    :else (str c)))
+
+(defn- coord-id [base c]
+  (if-let [local (:local/root c)]
+    (assoc c :local/root (if (path/absolute? local)
+                           (path/normalize local)
+                           (path/normalize (path/join base local))))
+    c))
+
+(defn- coords-at!
+  "config/coords-at, but an invalid dep config prints its rendered report and
+   exits 1 instead of escaping as a stack trace."
+  [dir]
+  (try
+    (config/coords-at dir)
+    (catch e
+           (if (:rite/invalid-dep-config (ex-data e))
+             (do (write! *err* (ex-message e))
+                 (os/exit 1))
+             (throw e)))))
+
+(defn ensure-all!
+  "Resolve `coords` and, transitively, the coords each fetched dep declares in
+   its own lgx.edn. Breadth-first from the given root, so a coord listed closer
+   to the root wins on conflicts (first-wins): the first coord seen for a lib
+   name is kept, and a later, differing coord for the same lib is skipped with a
+   warning. The `seen` set also terminates cycles. Returns the install results
+   ({:lib :path :installed?}) in resolution order.
+
+   Each queue entry carries its resolution base — the directory a relative
+   :local/root is resolved against. Top-level coords use `project`; a dep's
+   transitive coords use that dep's own directory, so a relative local path in a
+   dep means \"relative to the dep\", not to the consumer."
+  [project coords]
+  (loop [queue (mapv (fn [[lib c]] [lib c project]) coords)
+         seen {}
+         out []]
+    (if (empty? queue)
+      out
+      (let [[lib c base] (first queue)
+            id (coord-id base c)
+            rest-q (vec (rest queue))]
+        (if (contains? seen lib)
+          (do
+            (when (not= (get seen lib) id)
+              (write! *err*
+                      (str "warning: " lib " already resolved as "
+                           (coord-label (get seen lib)) "; ignoring "
+                           (coord-label id) "\n")))
+            (recur rest-q seen out))
+          (let [{:keys [path dir installed?]} (ensure-lib! c base)
+                children (mapv (fn [[clib cc]] [clib cc dir])
+                               (coords-at! dir))]
+            (recur (vec (concat rest-q children))
+                   (assoc seen lib id)
+                   (conj out {:lib lib
+                              :path path
+                              :installed? installed?}))))))))
+
+(defn print-installs!
+  "Print a short summary of any newly installed deps in `results` to stdout."
+  [results]
+  (let [new-installs (filter :installed? results)]
+    (when (seq new-installs)
+      (println "installing" (count new-installs) "dep(s)...")
+      (doseq [{:keys [lib path]} new-installs]
+        (println " " lib "->" path))
+      (println "done"))))
