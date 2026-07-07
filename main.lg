@@ -75,6 +75,11 @@
   ;; Script mode must be checked BEFORE cli/user-args: in a re-exec'd child,
   ;; os/args is [<exe> <script> <args>...], and <script> must not be misread as
   ;; the dev-mode ".lg prefix".
+  ;; rite ships as a bundle: `os/args` is [<rite> <cmd> <args>...], and
+  ;; user-args drops the program name. Running the CLI from source is awkward
+  ;; because both `lgx run` and a bare `lg` put -source-paths BEFORE main.lg, so
+  ;; user-args' ".lg prefix" detection misses it — develop via
+  ;; `lgx build && ./bin/rite` instead (see README).
   (if (script/script-mode? os/getenv)
     (script/run-script!)
     (let [parsed (cli/parse-leading-flags (cli/user-args os/args))

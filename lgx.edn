@@ -11,7 +11,11 @@
          lint {:doc "Lint source files"
                :do [{:sh "find src test -type f -name '*.lg' -print0 | xargs -0 clj-kondo --lint"}]}
          
+         e2e {:doc "Build the bundle and run unit + e2e tests"
+              :do [{:sh "bash tests/run.sh"}]}
+
          check {:doc "Run all checks"
                 :do [{:sh "lgx fmt check"}
                      {:sh "lgx lint"}
-                     {:sh "lgx test"}]}}}
+                     {:sh "lgx test"}
+                     {:sh "bash tests/run.sh"}]}}}

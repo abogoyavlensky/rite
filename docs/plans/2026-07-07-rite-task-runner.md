@@ -337,6 +337,8 @@ Note on lgx test sources: unit tests for ported modules start from the correspon
 - [x] **Step 6: Commit** — `git commit -m "feat: add self-exec script mode for :run steps"`
 
 > Deviation / SPIKE RESULT (verified against let-go 1.11.1, 2026-07-07): the whole self-exec mechanism works in a **bundled** binary — `set-read-clj!`, `alter-var-root` of `*command-line-args*`, and `load-string` of a script that `require`s a namespace off `LG_SOURCE_PATHS` all succeed (proven with a throwaway `lg -b` bundle). One correction to the plan: **`os/args` is a VALUE (vector, argv[0] = exe), not a function** — the parent side uses `(first os/args)`, not `(first (os/args))`. `source-paths` takes injected `exists?`/`warn` fns for pure testability. `set-read-clj!` added to the clj-kondo builtins exclude.
+>
+> Review fixups (codex, applied in commit `fix: correct :run source paths and env restore`): (P2b) `source-paths` now prepends the **project root** — an explicit `LG_SOURCE_PATHS` stops lg searching `.`, so without it a `:run` script couldn't require project/sibling namespaces; this also matches Task 7 step 2's literal "project root + task :paths + deps" wording. (P2d) `exec-script!` restores `LG_SOURCE_PATHS` to `"."` (lg's unset default) when it was originally blank — let-go has no `os/unsetenv` and lg treats `""` as "search nothing", so a bare `""` would break a later `:sh` step that runs lg. **Advisory, not fixed** (P2a): in **dev** mode (`lg main.lg`), the `:run` child is plain `lg`, which exits 0 even on a script error, so dev doesn't propagate `:run` failures the way the bundle does — an upstream let-go limitation; the shipped artifact is the bundle (where `run-script!` exits 1) and the e2e drives the bundle.
 
 ### Task 8: Task execution
 
@@ -357,6 +359,8 @@ Note on lgx test sources: unit tests for ported modules start from the correspon
 - [x] **Step 5: Commit** — `git commit -m "feat: add streaming task execution over the plan"`
 
 > Deviation: To honor "resolve basis once per entry", split Task 7's `script/exec-run-step!` into `script/resolve-basis!` (deps + source-paths, called once per entry when the task has any `:run` step) and `script/exec-script!` (per-step env-set + re-exec). `run-entry!` resolves the basis once and threads the `sp-value` to each `:run` step. Public prep helpers `sh-command`/`run-argv` (were private in lgx) so tasks_test can cover substitution. The `:run` step line echoes the joined argv (no `lgx run`-style prefix).
+>
+> Review fixup (codex P2c, applied in the same `fix:` commit as Task 7's): `run-entry!` now resolves the `:run` basis **lazily on the first `:run` step reached** (threaded through the step loop as `:unresolved` → resolved), instead of eagerly before step 1 — so an earlier failing `:sh` step never triggers a dep fetch, while still resolving at most once per entry.
 
 ### Task 9: Entry point, dispatch, and help
 
@@ -365,23 +369,25 @@ Note on lgx test sources: unit tests for ported modules start from the correspon
 - Create: `src/rite/help.lg` (pure usage rendering, so it's testable — main.lg stays a thin shell since requiring `rite.main` from tests would execute it)
 - Test: `test/rite/help_test.lg`
 
-- [ ] **Step 1: Write tests for help rendering**
+- [x] **Step 1: Write tests for help rendering**
   Port `task-line`/`tasks-block`/usage assembly behavior from `../lgx/lgx.lg` (doc-column alignment, arg signatures, sorted task names, invalid-config warning row, nil project → no tasks block). Usage text: `rite - task runner for any project`, commands `rite <task> [args...]`, `rite tasks`, `rite version`, `rite help`; options: `--verbose`.
 
-- [ ] **Step 2: Run** — `lgx test test/rite/help_test.lg` — Expected: FAIL.
+- [x] **Step 2: Run** — `lgx test test/rite/help_test.lg` — Expected: FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
   `help.lg`: pure renderers. `main.lg` (mirror `../lgx/lgx.lg` structure, heavily trimmed):
   1. `(def version "0.1.0")`.
   2. In `main`: **first** check `(script/script-mode? os/getenv)` → `(script/run-script!)` (never returns). This must precede `cli/user-args` — in script mode argv[1] is the task script and must not be misread as the dev-mode prefix.
   3. Else: `cli/user-args` → `parse-leading-flags` → dispatch: nil/`help`/`-h`/`--help` → print usage; `tasks` → requires a project (`find-project!`, exit 1 with "no rite.edn found..." otherwise); with a project but an empty/absent `:tasks`, print `no tasks defined in rite.edn` and exit 0, else print the tasks block; `version` → `rite <version>`; anything else → task lookup: find-project! + load-config!, unknown task → `rite: '<x>' is not a task. See 'rite help'.` exit 1; else bind CLI args (errors + usage-line on failure, exit 1), `plan/build-plan`, plan errors → print + exit 1, else `tasks/run-plan!`.
   4. Keep the `*compiling-aot*` guard around `(main)`.
 
-- [ ] **Step 4: Verify manually in dev mode**
+- [x] **Step 4: Verify manually in dev mode**
   Run: `lgx run` (bare) → usage prints. Create a scratch `rite.edn` in a temp dir with an `:sh` task and run `lgx run -- <task>`... note: dev-mode arg passing goes through `lgx run --`; simpler: `lgx build && ./bin/rite` from a temp project. Confirm: `rite` lists tasks, `rite <task>` runs, `rite version` prints.
   Run: `lgx test` — Expected: full suite PASS.
 
-- [ ] **Step 5: Commit** — `git commit -m "feat: add rite entry point, dispatch, and help"`
+- [x] **Step 5: Commit** — `git commit -m "feat: add rite entry point, dispatch, and help"`
+
+> Deviation: Bare `rite` behaves exactly like `rite help` (prints usage, exit 0), per the plan's "same as `rite help`". `-v`/`--version` added as conventional aliases (undocumented in the help text). Verified the built bundle end-to-end: usage/tasks/version, `:sh` task, `{{var}}` + arg defaults, enum-arg rejection with usage line, too-many-args, `:depends` ordering, mid-chain failure stops the chain and propagates the exit code (7), unknown-task and no-project errors. `main.lg` requires `rite.args` for the friendly pre-bind (build-plan re-binds the root).
 
 ### Task 10: E2E harness
 
