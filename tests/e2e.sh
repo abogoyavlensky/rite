@@ -153,13 +153,17 @@ assert_eq "$out" "hi there" ":var/kw: shell-quoted, spaces stay one arg"
 out="$(cd "$proj" && RITE_HOME="$home" "$RITE" raw 2>/dev/null)"
 assert_eq "$out" "{{ untouched }}" "non-token {{...}}: passes through verbatim"
 
-# unknown prefixed token is a load error
+# unknown prefixed token is a load error: invoking an unrelated valid task
+# still fails, so the rejection can only come from config loading, not from
+# runtime expansion of the malformed step.
 cat > "$proj/rite.edn" <<'EOF'
-{:tasks {tmpl {:do [{:sh "echo v{{var/missing}}"}]}}}
+{:tasks {tmpl {:do [{:sh "echo v{{var/missing}}"}]}
+         ok   {:do [{:sh "echo fine"}]}}}
 EOF
-set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" tmpl 2>&1)"; rc=$?; set -e
+set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" ok 2>&1)"; rc=$?; set -e
 [[ $rc -eq 1 ]] || fail "unknown {{var/*}} token: expected exit 1 (got $rc)"
-assert_contains "$out" "placeholder :var/missing" "unknown {{var/*}} token: load error message"
+assert_contains "$out" "invalid rite.edn" "unknown {{var/*}} token: rejected at load"
+assert_contains "$out" "placeholder :var/missing used but no :vars defined" "unknown {{var/*}} token: load error message"
 rm -rf "$proj" "$home"
 
 # ---------------------------------------------------------------------------
