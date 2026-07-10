@@ -1,4 +1,4 @@
-# Template Prefixes Implementation Plan
+# Template Prefixes Implementation Plan ✅ COMPLETED
 
 > **For agentic workers:** Use executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -97,7 +97,7 @@ keyword `:arg/<name>` or `:var/<name>`; anything else is not a token.
 - Modify: `src/rite/tasks.lg` (comments), `src/rite/plan.lg` (comments)
 - Test: `test/rite/args_test.lg`, `test/rite/tasks_test.lg`, `test/rite/plan_test.lg`
 
-- [ ] **Step 1: Rewrite the expand tests**
+- [x] **Step 1: Rewrite the expand tests**
   In `test/rite/args_test.lg`, replace the bare-token tests (lines ~170–225)
   with the new grammar. Cover: `{{arg/name}}` and `{{var/name}}` expansion;
   spaced form `{{ var/version }}` expands; adjacent tokens
@@ -113,18 +113,18 @@ keyword `:arg/<name>` or `:var/<name>`; anything else is not a token.
   document order from a mixed string; `[]` for plain text and for
   non-tokens; duplicates preserved.
 
-- [ ] **Step 2: Update downstream test fixtures**
+- [x] **Step 2: Update downstream test fixtures**
   Switch tokens in `test/rite/tasks_test.lg` (`{{msg}}` → `{{arg/msg}}`,
   `{{version}}` → `{{var/version}}`, `{{env}}` → `{{arg/env}}`) and
   `test/rite/plan_test.lg` (`echo {{version}}` → `echo {{var/version}}`,
   dep entry `"v{{version}}"` → `"v{{var/version}}"`).
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [x] **Step 3: Run tests to verify they fail**
   Run: `lgx test`
   Expected: FAIL — new-grammar assertions in `args_test`, `tasks_test`,
   `plan_test`; `template-tokens` unresolved.
 
-- [ ] **Step 4: Implement the scanner and new expand**
+- [x] **Step 4: Implement the scanner and new expand**
   In `src/rite/args.lg`:
   - A private `parse-token` helper: inner text → `:arg/<name>` /
     `:var/<name>` keyword or nil, per the grammar above (trim, prefix
@@ -139,11 +139,11 @@ keyword `:arg/<name>` or `:var/<name>`; anything else is not a token.
     gone), and the ns/section comments in `args.lg`, `tasks.lg` (lines
     19–23), `plan.lg` (`resolve-item` docstring).
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
   Run: `lgx test`
   Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
   `git commit -m "feat: require arg/ and var/ prefixes in string templates"`
 
 ### Task 2: Load-time validation (`rite.config`)
@@ -152,7 +152,7 @@ keyword `:arg/<name>` or `:var/<name>`; anything else is not a token.
 - Modify: `src/rite/config.lg`
 - Test: `test/rite/config_test.lg`
 
-- [ ] **Step 1: Write the failing validation tests**
+- [x] **Step 1: Write the failing validation tests**
   In `test/rite/config_test.lg`:
   - A string step value with an unknown token errors:
     `{:sh "echo {{arg/x}}"}` with no `:args` → error at path
@@ -171,11 +171,11 @@ keyword `:arg/<name>` or `:var/<name>`; anything else is not a token.
     `['notify "v{{var/version}}"]` with `version` defined → no error
     (update the lenient test at ~line 529).
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
   Run: `lgx test`
   Expected: FAIL on the new config cases only.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
   In `src/rite/config.lg`:
   - `step-ref-errors`: handle a **string** step value (scan with
     `args/template-tokens`, errors at path `[k]`) and string items in
@@ -190,11 +190,11 @@ keyword `:arg/<name>` or `:var/<name>`; anything else is not a token.
   - Update `depends-item-errors` docstring and the cross-check section
     comments (config.lg ~lines 250, 341, 418–424).
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
   Run: `lgx test`
   Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat: validate {{arg/*}}/{{var/*}} string tokens at load time"`
 
 ### Task 3: Docs and e2e
@@ -203,7 +203,7 @@ keyword `:arg/<name>` or `:var/<name>`; anything else is not a token.
 - Modify: `README.md`
 - Modify: `tests/e2e.sh`
 
-- [ ] **Step 1: Update README**
+- [x] **Step 1: Update README**
   - Quickstart/reference examples: `{{version}}` → `{{var/version}}`.
   - `:vars` section: "Reference a var as `{{var/name}}` in any step string
     or as `:var/name` in a step vector."
@@ -216,16 +216,45 @@ keyword `:arg/<name>` or `:var/<name>`; anything else is not a token.
     load error" sentence.
   Use /writing-clearly.
 
-- [ ] **Step 2: Update e2e scenarios**
+- [x] **Step 2: Update e2e scenarios**
   In `tests/e2e.sh`: switch Scenario 3 and the deploy/notify fixtures to
   prefixed tokens (`{{var/version}}`, `{{arg/env}}`, `{{arg/tag}}`); add
   one assertion that a non-token (e.g. `echo '{{ untouched }}'`) passes
   through verbatim; add one assertion that an unknown prefixed token in
   rite.edn fails at load with exit 1 and an "unknown placeholder" message.
 
-- [ ] **Step 3: Run the full check**
+- [x] **Step 3: Run the full check**
   Run: `lgx check`
   Expected: fmt, lint, build, unit, and e2e all PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
   `git commit -m "docs: document prefixed template tokens; update e2e"`
+
+---
+
+## Completion summary
+
+Implemented across four commits (4664613, 7cb29ff, 9ad1ef6, c3c0cc0):
+`{{arg/<name>}}`/`{{var/<name>}}` are now the only recognized string tokens
+(whitespace-insensitive, shared `parse-token`/`template-tokens` grammar in
+`rite.args`), validated at load time in both step strings and `:depends`
+tail strings; every other `{{...}}` passes through; the shadowing rule is
+gone; `entry-value-checkable?` now value-checks strings whose braces are
+non-tokens. README and e2e updated. Final state: `lgx check` green
+(309 unit tests / 374 assertions, 42 e2e assertions), plus a manual
+end-to-end drive of `bin/rite` covering expansion, forwarding, pass-through,
+and the load-error path.
+
+Issues encountered: none substantive. Per-task codex reviews flagged
+(a) the intentionally deferred validation/e2e work after Task 1 (resolved
+by Tasks 2–3 as sequenced), and (b) a P2 on the e2e unknown-token assertion
+not proving *load-time* rejection — fixed in c3c0cc0 by invoking an
+unrelated valid task in the malformed config and asserting the
+"invalid rite.edn" load message.
+
+Deviations: none — all tasks executed as written (one formatting slip in
+`config.lg` was caught by `lgx fmt check` and amended into 7cb29ff).
+
+What the plan could have specified better: the e2e unknown-token assertion
+should have specified proving load-time (vs runtime) rejection — codex
+caught it; otherwise the plan held up.
