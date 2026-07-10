@@ -248,8 +248,8 @@
   [:and [:vector {:min 1} arg-schema] [:fn args-vector-errors]])
 
 (defn- depends-item-errors
-  "A dep entry's tail item: a string (with {{...}} expansion) or an
-   :arg/<name>/:var/<name> forwarding keyword."
+  "A dep entry's tail item: a string (with {{arg/*}}/{{var/*}} expansion) or
+   an :arg/<name>/:var/<name> forwarding keyword."
   [item]
   (when-not (or (string? item) (step-placeholder? item))
     (str "must be a string, :arg/<name>, or :var/<name>, got " (pr-str item))))
@@ -339,16 +339,52 @@
   [:map-of [:fn var-name-errors] [:fn var-value-errors]])
 
 ;; --- placeholder cross-check (arg + var), run over the whole config so the
-;; --- var check can see the root :vars.
+;; --- var check can see the root :vars. Covers keyword placeholders in step
+;; --- vectors and {{arg/*}}/{{var/*}} tokens in step strings alike.
+
+(defn- ref-error-msg
+  "The unknown-placeholder message for keyword `k` (an :arg/* or :var/*
+   placeholder), or nil when k names a declared arg / defined var."
+  [declared arg-label defined-vars var-label k]
+  (cond
+    (and (arg-placeholder? k)
+         (not (contains? declared k)))
+    (if (nil? arg-label)
+      (str "placeholder " k " used but no :args declared")
+      (str "unknown placeholder " k " (declared: " arg-label ")"))
+
+    (and (var-placeholder? k)
+         (not (contains? defined-vars k)))
+    (if (nil? var-label)
+      (str "placeholder " k " used but no :vars defined")
+      (str "unknown placeholder " k " (defined: " var-label ")"))
+
+    :else nil))
+
+(defn- string-token-errors
+  "Errors for the recognized {{arg/*}}/{{var/*}} tokens of string `s`, each
+   reported at `path`."
+  [declared arg-label defined-vars var-label path s]
+  (vec (mapcat (fn [k]
+                 (let [m (ref-error-msg declared arg-label defined-vars
+                                        var-label k)]
+                   (if m [{:path path
+                           :msg m}] [])))
+               (args/template-tokens s))))
 
 (defn- step-ref-errors
-  "Errors for one valid step: every :arg/* must name a declared arg, every
-   :var/* a defined var. Paths are relative to the step (e.g. [:sh 1])."
+  "Errors for one valid step: every :arg/* keyword item or {{arg/*}} string
+   token must name a declared arg, every :var/* a defined var. Paths are
+   relative to the step — [:sh j] for a vector item, [:sh] for a string
+   step value."
   [declared arg-label defined-vars var-label step]
   (let [k (if (contains? step :sh) :sh :run)
         v (get step k)]
-    (if-not (vector? v)
-      []
+    (cond
+      (string? v)
+      (string-token-errors declared arg-label defined-vars var-label [k] v)
+
+      (vector? v)
       (loop [j 0
              acc []]
         (if (>= j (count v))
@@ -356,25 +392,20 @@
           (let [item (nth v j)]
             (recur (inc j)
                    (cond
-                     (and (arg-placeholder? item)
-                          (not (contains? declared item)))
-                     (conj acc {:path [k j]
-                                :msg (if (nil? arg-label)
-                                       (str "placeholder " item
-                                            " used but no :args declared")
-                                       (str "unknown placeholder " item
-                                            " (declared: " arg-label ")"))})
+                     (step-placeholder? item)
+                     (let [m (ref-error-msg declared arg-label defined-vars
+                                            var-label item)]
+                       (if m (conj acc {:path [k j]
+                                        :msg m}) acc))
 
-                     (and (var-placeholder? item)
-                          (not (contains? defined-vars item)))
-                     (conj acc {:path [k j]
-                                :msg (if (nil? var-label)
-                                       (str "placeholder " item
-                                            " used but no :vars defined")
-                                       (str "unknown placeholder " item
-                                            " (defined: " var-label ")"))})
+                     (string? item)
+                     (into acc (string-token-errors declared arg-label
+                                                    defined-vars var-label
+                                                    [k j] item))
 
-                     :else acc))))))))
+                     :else acc)))))
+
+      :else [])))
 
 (defn- task-ref-errors
   "Walk one task's :do — a single step map or a vector of steps (validation
@@ -416,16 +447,18 @@
                  (or (:tasks cfg) {})))))
 
 ;; --- :depends semantic cross-checks: every entry names a defined task; entry
-;; --- placeholders forward a parent arg / defined var; literal-only entries are
-;; --- value-checked against the dep's :args; and the name graph is acyclic.
+;; --- placeholders (keywords and {{arg/*}}/{{var/*}} string tokens) forward a
+;; --- parent arg / defined var; literal-only entries are value-checked against
+;; --- the dep's :args; and the name graph is acyclic.
 
 (defn- entry-value-checkable?
-  "True when every tail item is a plain literal string (no {{...}} template and
-   no placeholder) — only then are the dep's arg values fully known at load."
+  "True when every tail item is a plain literal string (no recognized
+   {{arg/*}}/{{var/*}} token and no placeholder keyword) — only then are the
+   dep's arg values fully known at load."
   [items]
   (every? (fn [item]
             (and (string? item)
-                 (nil? (str/index-of item "{{"))))
+                 (empty? (args/template-tokens item))))
           items))
 
 (defn- depends-entry-ref-errors
@@ -441,27 +474,35 @@
                   (str/join ", " (sort (map str (keys tasks)))) ")")}]
       (let [dep-task (get tasks dep-name)
             dep-decls (or (:args dep-task) [])
+            forward-error-msg
+            (fn [k]
+              (cond
+                (arg-placeholder? k)
+                (when-not (contains? parent-declared k)
+                  (if (nil? parent-arg-label)
+                    (str "forwards " k " but task " parent-name
+                         " declares no args")
+                    (str "forwards " k " but task " parent-name
+                         " has no such arg (declared: "
+                         parent-arg-label ")")))
+
+                (var-placeholder? k)
+                (when-not (contains? defined-vars k)
+                  (str "references " k " but no such var is defined"))
+
+                :else nil))
             ph-errors
             (vec (mapcat
                    (fn [item]
-                     (cond
-                       (arg-placeholder? item)
-                       (when-not (contains? parent-declared item)
-                         [{:path base-path
-                           :msg (if (nil? parent-arg-label)
-                                  (str "forwards " item " but task "
-                                       parent-name " declares no args")
-                                  (str "forwards " item " but task "
-                                       parent-name " has no such arg (declared: "
-                                       parent-arg-label ")"))}])
-
-                       (var-placeholder? item)
-                       (when-not (contains? defined-vars item)
-                         [{:path base-path
-                           :msg (str "references " item
-                                     " but no such var is defined")}])
-
-                       :else nil))
+                     (let [ks (cond
+                                (step-placeholder? item) [item]
+                                (string? item) (args/template-tokens item)
+                                :else [])]
+                       (mapcat (fn [k]
+                                 (let [m (forward-error-msg k)]
+                                   (when m [{:path base-path
+                                             :msg m}])))
+                               ks)))
                    items))]
         (cond
           (seq ph-errors) ph-errors

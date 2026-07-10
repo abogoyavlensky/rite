@@ -61,7 +61,7 @@
                                       :type [:enum "prod" "staging"]}]
                               :do [{:sh ["./deploy.sh" :arg/env]}
                                    {:sh ["echo" :var/version]}
-                                   {:sh "released {{version}} to {{env}}"}]}}}]
+                                   {:sh "released {{var/version}} to {{arg/env}}"}]}}}]
     (is (= {:cfg cfg} (load-cfg cfg)))))
 
 (deftest load-accepts-namespaced-task-name
@@ -384,6 +384,47 @@
     (is (= {:cfg cfg} (load-cfg cfg)))))
 
 ;; ---------------------------------------------------------------------------
+;; load-config: {{arg/*}}/{{var/*}} string-token cross-checks
+;; ---------------------------------------------------------------------------
+
+(deftest load-accepts-non-token-braces-in-strings
+  ;; Bare names and foreign {{...}} syntax are not tokens — never load errors.
+  (let [cfg {:tasks {'d {:do [{:sh "echo {{version}} {{ github.sha }} {{a/b/c}}"}]}}}]
+    (is (= {:cfg cfg} (load-cfg cfg)))))
+
+(deftest load-rejects-unknown-arg-token-in-string-step
+  (is (= {:errors [{:path [:tasks 'd :do 0 :sh]
+                    :msg "placeholder :arg/x used but no :args declared"}]}
+         (load-cfg {:tasks {'d {:do [{:sh "echo {{arg/x}}"}]}}}))))
+
+(deftest load-rejects-unknown-arg-token-with-declared-args
+  (is (= {:errors [{:path [:tasks 'd :do 0 :sh]
+                    :msg "unknown placeholder :arg/typo (declared: :env)"}]}
+         (load-cfg {:tasks {'d {:args [{:name :env}]
+                                :do [{:sh "echo {{arg/typo}}"}]}}}))))
+
+(deftest load-rejects-unknown-var-token-in-string-step
+  (is (= {:errors [{:path [:tasks 'd :do 0 :sh]
+                    :msg "unknown placeholder :var/typo (defined: :version)"}]}
+         (load-cfg {:vars {:version "1"}
+                    :tasks {'d {:do [{:sh "echo {{var/typo}}"}]}}}))))
+
+(deftest load-rejects-unknown-var-token-in-vector-string-item
+  (is (= {:errors [{:path [:tasks 'd :do 0 :sh 1]
+                    :msg "placeholder :var/x used but no :vars defined"}]}
+         (load-cfg {:tasks {'d {:do [{:sh ["echo" "{{var/x}}"]}]}}}))))
+
+(deftest load-rejects-unknown-token-in-run-string
+  (is (= {:errors [{:path [:tasks 'd :do 0 :run]
+                    :msg "placeholder :arg/x used but no :args declared"}]}
+         (load-cfg {:tasks {'d {:do [{:run "t.lg {{arg/x}}"}]}}}))))
+
+(deftest load-rejects-unknown-token-in-single-step-map-do
+  (is (= {:errors [{:path [:tasks 'd :do :sh]
+                    :msg "placeholder :arg/x used but no :args declared"}]}
+         (load-cfg {:tasks {'d {:do {:sh "echo {{arg/x}}"}}}}))))
+
+;; ---------------------------------------------------------------------------
 ;; load-config: :depends structural
 ;; ---------------------------------------------------------------------------
 
@@ -526,12 +567,34 @@
     (is (= {:cfg cfg} (load-cfg cfg)))))
 
 (deftest load-accepts-var-template-in-depends
-  ;; a {{...}} string in a dep entry is lenient at load time
+  ;; a recognized token in a dep entry skips value checks at load time
   (let [cfg {:vars {:version "1.2.0"}
              :tasks {'notify {:args [{:name :msg}]
                               :do [{:sh ["echo" :arg/msg]}]}
-                     'root {:depends [['notify "v{{version}}"]]}}}]
+                     'root {:depends [['notify "v{{var/version}}"]]}}}]
     (is (= {:cfg cfg} (load-cfg cfg)))))
+
+(deftest load-rejects-depends-arg-token-undeclared
+  (is (= {:errors [{:path [:tasks 'root :depends 0]
+                    :msg "forwards :arg/x but task root declares no args"}]}
+         (load-cfg {:tasks {'notify {:args [{:name :msg}]
+                                     :do [{:sh "echo hi"}]}
+                            'root {:depends [['notify "v{{arg/x}}"]]}}}))))
+
+(deftest load-rejects-depends-var-token-undefined
+  (is (= {:errors [{:path [:tasks 'root :depends 0]
+                    :msg "references :var/x but no such var is defined"}]}
+         (load-cfg {:tasks {'notify {:args [{:name :msg}]
+                                     :do [{:sh "echo hi"}]}
+                            'root {:depends [['notify "v{{var/x}}"]]}}}))))
+
+(deftest load-value-checks-depends-string-with-non-token-braces
+  ;; {{foreign}} is not a token, so the entry is literal and value-checked:
+  ;; fmt takes no args.
+  (is (= {:errors [{:path [:tasks 'root :depends 0]
+                    :msg "depends on fmt: task takes no arguments (got 1)"}]}
+         (load-cfg {:tasks {'fmt {:do [{:sh "echo hi"}]}
+                            'root {:depends [['fmt "v{{foreign}}"]]}}}))))
 
 (deftest load-rejects-self-cycle
   (is (= {:errors [{:path [:tasks 'a]
