@@ -22,6 +22,14 @@
   (is (= "/tmp/xdg-cache-test/rite" (home/root)))
   (os/setenv "XDG_CACHE_HOME" ""))
 
+;; The XDG spec requires XDG_CACHE_HOME to be absolute; relative values must
+;; be ignored, else the cache lands relative to the current working directory.
+(deftest root-ignores-relative-xdg-cache-home
+  (os/setenv "RITE_HOME" "")
+  (os/setenv "XDG_CACHE_HOME" "relative/cache")
+  (is (= (path/join (os/getenv "HOME") ".cache" "rite") (home/root)))
+  (os/setenv "XDG_CACHE_HOME" ""))
+
 (deftest root-defaults-to-home-dot-cache-rite
   (os/setenv "RITE_HOME" "")
   (os/setenv "XDG_CACHE_HOME" "")
