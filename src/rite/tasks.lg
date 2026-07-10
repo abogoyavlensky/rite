@@ -19,8 +19,9 @@
 ;; A step value may reference the task's bound arg+var values two ways:
 ;;   - :arg/<name> / :var/<name> items in a vector, replaced whole:
 ;;     shell-quoted for :sh, verbatim for :run.
-;;   - {{<name>}} tokens in any string, spliced raw (args shadow vars); unknown
-;;     tokens pass through. A :run string is expanded then whitespace-split.
+;;   - {{arg/<name>}} / {{var/<name>}} tokens in any string, spliced raw;
+;;     any other {{...}} content passes through. A :run string is expanded
+;;     then whitespace-split.
 ;; --------------------------------------------------------------------------
 
 (defn- as-string [value]
@@ -34,8 +35,8 @@
 
 (defn sh-command
   "The final `sh -c` command string for a :sh step value: vector items are
-   substituted (shell-quoted) and joined with spaces; a string is
-   {{...}}-expanded."
+   substituted (shell-quoted) and joined with spaces; a string has its
+   {{arg/*}}/{{var/*}} tokens expanded."
   [value bindings]
   (as-string (substituted value bindings true)))
 

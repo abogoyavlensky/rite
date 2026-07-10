@@ -12,11 +12,11 @@
 
 (deftest sh-command-string-expands-templates
   (is (= "released hi"
-         (tasks/sh-command "released {{msg}}" {:arg/msg "hi"}))))
+         (tasks/sh-command "released {{arg/msg}}" {:arg/msg "hi"}))))
 
 (deftest sh-command-string-expands-var-template
   (is (= "echo 1.2.0"
-         (tasks/sh-command "echo {{version}}" {:var/version "1.2.0"}))))
+         (tasks/sh-command "echo {{var/version}}" {:var/version "1.2.0"}))))
 
 (deftest sh-command-vector-quotes-arg
   (is (= "./deploy.sh 'prod'"
@@ -38,7 +38,7 @@
 
 (deftest run-argv-string-splits-after-expansion
   (is (= ["scripts/notify.lg" "prod"]
-         (tasks/run-argv "scripts/notify.lg {{env}}" {:arg/env "prod"}))))
+         (tasks/run-argv "scripts/notify.lg {{arg/env}}" {:arg/env "prod"}))))
 
 (deftest run-argv-vector-substitutes-verbatim
   (is (= ["scripts/notify.lg" "prod"]

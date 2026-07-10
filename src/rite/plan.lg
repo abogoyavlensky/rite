@@ -15,9 +15,9 @@
 ;; --------------------------------------------------------------------------
 
 (defn- resolve-item
-  "Resolve one dep-entry tail item against the parent's bindings: a string is
-   {{...}}-expanded, an :arg/*/:var/* keyword is substituted to its bound
-   value (verbatim)."
+  "Resolve one dep-entry tail item against the parent's bindings: a string
+   has its {{arg/*}}/{{var/*}} tokens expanded, an :arg/*/:var/* keyword is
+   substituted to its bound value (verbatim)."
   [item bindings]
   (if (string? item)
     (args/expand item bindings)

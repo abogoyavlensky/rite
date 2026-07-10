@@ -166,64 +166,103 @@
               (catch e :threw)))))
 
 ;; ---------------------------------------------------------------------------
-;; expand — args shadow vars
+;; expand — {{arg/<name>}} / {{var/<name>}} tokens only
 ;; ---------------------------------------------------------------------------
 
-(deftest expand-basic
-  (is (= "v1.2" (args/expand "v{{version}}" {:arg/version "1.2"}))))
+(deftest expand-arg-token
+  (is (= "v1.2" (args/expand "v{{arg/version}}" {:arg/version "1.2"}))))
+
+(deftest expand-var-token
+  (is (= "v1.2.0" (args/expand "v{{var/version}}" {:var/version "1.2.0"}))))
 
 (deftest expand-multiple-tokens
   (is (= "prod-1.2"
-         (args/expand "{{env}}-{{version}}" {:arg/env "prod"
-                                             :arg/version "1.2"}))))
+         (args/expand "{{arg/env}}-{{var/version}}" {:arg/env "prod"
+                                                     :var/version "1.2"}))))
 
 (deftest expand-whole-string-is-one-token
-  (is (= "prod" (args/expand "{{env}}" {:arg/env "prod"}))))
+  (is (= "prod" (args/expand "{{arg/env}}" {:arg/env "prod"}))))
 
-(deftest expand-from-var
-  (is (= "v1.2.0" (args/expand "v{{version}}" {:var/version "1.2.0"}))))
+(deftest expand-inner-whitespace-is-insignificant
+  (is (= "v1.2.0" (args/expand "v{{ var/version }}" {:var/version "1.2.0"})))
+  (is (= "prod" (args/expand "{{  arg/env\t}}" {:arg/env "prod"}))))
 
-(deftest expand-arg-shadows-var
-  ;; When both an arg and a var carry the same name, the arg wins.
-  (is (= "arg-wins"
-         (args/expand "{{env}}" {:arg/env "arg-wins"
-                                 :var/env "var-loses"}))))
+(deftest expand-no-shadowing-namespace-is-explicit
+  ;; Same name bound in both namespaces: each token picks its own.
+  (is (= "from-arg from-var"
+         (args/expand "{{arg/env}} {{var/env}}" {:arg/env "from-arg"
+                                                 :var/env "from-var"}))))
 
-(deftest expand-falls-back-to-var
-  ;; No matching arg, so the var value is used.
-  (is (= "var-value"
-         (args/expand "{{env}}" {:arg/other "x"
-                                 :var/env "var-value"}))))
+(deftest expand-bare-name-passes-through
+  ;; The old bare form is not a token, even when a matching binding exists.
+  (is (= "v{{version}}" (args/expand "v{{version}}" {:arg/version "1.2"
+                                                     :var/version "1.2"}))))
 
-(deftest expand-unknown-name-passes-through
-  (is (= "v{{verison}}" (args/expand "v{{verison}}" {:arg/version "1.2"}))))
+(deftest expand-foreign-syntax-passes-through
+  (is (= "sha {{ github.sha }}" (args/expand "sha {{ github.sha }}"
+                                             {:arg/env "prod"})))
+  (is (= "{{a/b/c}}" (args/expand "{{a/b/c}}" {:arg/version "1.2"})))
+  (is (= "{{other/env}}" (args/expand "{{other/env}}" {:arg/env "prod"}))))
 
-(deftest expand-empty-bindings-leaves-tokens
-  (is (= "v{{version}}" (args/expand "v{{version}}" {}))))
-
-(deftest expand-unclosed-token-passes-through
-  (is (= "v{{version" (args/expand "v{{version" {:arg/version "1.2"}))))
+(deftest expand-name-with-space-passes-through
+  (is (= "{{arg/a b}}" (args/expand "{{arg/a b}}" {:arg/a "x"}))))
 
 (deftest expand-empty-name-passes-through
+  (is (= "x{{arg/}}y" (args/expand "x{{arg/}}y" {:arg/version "1.2"})))
   (is (= "x{{}}y" (args/expand "x{{}}y" {:arg/version "1.2"}))))
 
-(deftest expand-slash-name-passes-through
-  (is (= "{{a/b}}" (args/expand "{{a/b}}" {:arg/version "1.2"}))))
+(deftest expand-unclosed-token-passes-through
+  (is (= "v{{arg/version" (args/expand "v{{arg/version"
+                                       {:arg/version "1.2"}))))
+
+(deftest expand-recognized-unbound-token-throws
+  ;; Load-time validation guarantees boundness; an unbound recognized token
+  ;; is a programmer error, mirroring substitute.
+  (is (= :threw
+         (try (args/expand "{{arg/env}}" {})
+              :no-throw
+              (catch e :threw))))
+  (is (= :threw
+         (try (args/expand "{{var/env}}" {:arg/env "prod"})
+              :no-throw
+              (catch e :threw)))))
 
 (deftest expand-values-are-inert
   ;; A bound value containing another token is never re-expanded.
-  (is (= "{{b}}" (args/expand "{{a}}" {:arg/a "{{b}}"
-                                       :arg/b "x"}))))
+  (is (= "{{var/b}}" (args/expand "{{arg/a}}" {:arg/a "{{var/b}}"
+                                               :var/b "x"}))))
 
 (deftest expand-raw-splice-adds-no-quoting
   (is (= "tag 1.2; echo hi"
-         (args/expand "tag {{v}}" {:arg/v "1.2; echo hi"}))))
+         (args/expand "tag {{arg/v}}" {:arg/v "1.2; echo hi"}))))
 
 (deftest expand-stray-braces-before-real-token
-  (is (= "{{aprod" (args/expand "{{a{{env}}" {:arg/env "prod"}))))
+  (is (= "{{xprod" (args/expand "{{x{{arg/env}}" {:arg/env "prod"}))))
 
 (deftest expand-no-tokens-returns-string-as-is
   (is (= "plain text" (args/expand "plain text" {:arg/env "prod"}))))
+
+;; ---------------------------------------------------------------------------
+;; template-tokens
+;; ---------------------------------------------------------------------------
+
+(deftest template-tokens-in-document-order
+  (is (= [:arg/env :var/version]
+         (args/template-tokens "deploy {{arg/env}} v{{ var/version }}"))))
+
+(deftest template-tokens-none-in-plain-text
+  (is (= [] (args/template-tokens "plain text"))))
+
+(deftest template-tokens-ignores-non-tokens
+  (is (= [] (args/template-tokens
+              "{{name}} {{ github.sha }} {{a/b/c}} {{}} {{arg/a b}} {{x"))))
+
+(deftest template-tokens-keeps-duplicates
+  (is (= [:var/v :var/v]
+         (args/template-tokens "{{var/v}}.{{var/v}}"))))
+
+(deftest template-tokens-inner-token-after-stray-braces
+  (is (= [:arg/env] (args/template-tokens "{{x{{arg/env}}"))))
 
 ;; ---------------------------------------------------------------------------
 ;; signature / usage-line

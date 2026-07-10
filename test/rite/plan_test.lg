@@ -27,7 +27,7 @@
     (is (= {:arg/env "prod"} (:bindings (first (:plan r)))))))
 
 (deftest single-task-merges-vars
-  (let [tasks {'rel {:do [{:sh "echo {{version}}"}]}}
+  (let [tasks {'rel {:do [{:sh "echo {{var/version}}"}]}}
         r (plan/build-plan tasks {:version "1.2.0"} 'rel [])]
     (is (= {:var/version "1.2.0"} (:bindings (first (:plan r)))))))
 
@@ -92,7 +92,7 @@
 (deftest var-template-in-dep-entry-expands
   (let [tasks {'notify {:args [{:name :msg}]
                         :do [{:sh ["echo" :arg/msg]}]}
-               'root {:depends [['notify "v{{version}}"]]}}
+               'root {:depends [['notify "v{{var/version}}"]]}}
         r (plan/build-plan tasks {:version "1.2.0"} 'root [])]
     (is (= {:arg/msg "v1.2.0"
             :var/version "1.2.0"} (:bindings (first (:plan r)))))))
