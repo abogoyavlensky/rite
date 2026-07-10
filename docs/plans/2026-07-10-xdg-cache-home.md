@@ -1,4 +1,4 @@
-# XDG Cache Home Implementation Plan
+# XDG Cache Home Implementation Plan ✅ COMPLETED
 
 > **For agentic workers:** Use executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -56,7 +56,7 @@ so rite shares lgx's gitlibs cache by default. Fetched deps land under
 - Modify: `src/rite/home.lg`
 - Test: `test/rite/home_test.lg`
 
-- [ ] **Step 1: Update the unit tests**
+- [x] **Step 1: Update the unit tests**
   In `test/rite/home_test.lg`, keep the save-as-`""`-and-restore pattern the
   file already uses and cover the new chain:
   - `root-prefers-rite-home`: with both `RITE_HOME` and `XDG_CACHE_HOME` set,
@@ -70,12 +70,12 @@ so rite shares lgx's gitlibs cache by default. Fetched deps land under
   never rely on the ambient environment — and restore both vars to `""`
   afterward. Delete the `LGX_HOME` test.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
   Run: `lgx test`
   Expected: FAIL — the XDG fallback and new default assertions fail against
   the current `~/.lgx` chain.
 
-- [ ] **Step 3: Implement the new chain**
+- [x] **Step 3: Implement the new chain**
   In `src/rite/home.lg`, replace the `LGX_HOME` cond branch:
 
   ```clojure
@@ -89,12 +89,16 @@ so rite shares lgx's gitlibs cache by default. Fetched deps land under
   `~/.cache/rite`. Confirm `path/join` accepts three args (it is used
   variadically in `deps.lg`); if not, nest two calls.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
   Run: `lgx test`
   Expected: PASS, all suites.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat: default dep cache to XDG ~/.cache/rite"`
+
+> Deviation: codex review (P2) — the XDG spec requires `XDG_CACHE_HOME` to be
+> absolute and says relative values must be ignored. Added a `path/absolute?`
+> guard to the XDG branch plus a regression test; fixup commit `6c339d7`.
 
 ### Task 2: Comments, docs, and e2e hermeticity
 
@@ -103,13 +107,13 @@ so rite shares lgx's gitlibs cache by default. Fetched deps land under
 - Modify: `README.md`
 - Modify: `tests/e2e.sh`
 
-- [ ] **Step 1: Update the deps.lg cache-layout comment**
+- [x] **Step 1: Update the deps.lg cache-layout comment**
   The header comment block in `src/rite/deps.lg` (lines ~7–17) says the home
   is "shared with lgx by default". Reword: home = `rite.home/root`, defaulting
   to `$XDG_CACHE_HOME/rite` or `~/.cache/rite`; layout is lgx-compatible, so
   `RITE_HOME=~/.lgx` shares lgx's cache.
 
-- [ ] **Step 2: Update README**
+- [x] **Step 2: Update README**
   Use /writing-clearly. Two spots:
   - Env-var table (line ~264): `RITE_HOME` default becomes
     `$XDG_CACHE_HOME/rite`, else `~/.cache/rite`. Note that pointing it at
@@ -118,16 +122,44 @@ so rite shares lgx's gitlibs cache by default. Fetched deps land under
     cache" — keep "shared" meaning across projects, and drop any implication
     that lgx sharing is the default.
 
-- [ ] **Step 3: Harden e2e preamble**
+- [x] **Step 3: Harden e2e preamble**
   In `tests/e2e.sh`, alongside the existing hermeticity setup (the harness
   already exports throwaway `RITE_HOME` dirs), unset or blank
   `XDG_CACHE_HOME` so a caller's value can never leak into any scenario.
   Update the header comment if it mentions the `~/.lgx` default.
 
-- [ ] **Step 4: Run the full suite**
+- [x] **Step 4: Run the full suite**
   Run: `lgx test && bash tests/run.sh`
   Expected: unit tests PASS; all e2e scenarios PASS (39 assertions at last
   count).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "docs: describe XDG cache default; keep e2e hermetic to XDG_CACHE_HOME"`
+
+---
+
+## Completion Summary
+
+**Implemented.** `rite.home/root` now resolves `RITE_HOME` →
+`$XDG_CACHE_HOME/rite` (absolute values only) → `~/.cache/rite`; `LGX_HOME`
+is dropped from the chain. Cache layout is unchanged, so `RITE_HOME=~/.lgx`
+still shares lgx's cache as a documented opt-in. Docs, the `deps.lg` layout
+comment, and the e2e preamble updated accordingly.
+
+**Commits:** `17b190b` (chain + tests), `6c339d7` (relative-XDG fixup),
+`18eeaad` (docs + e2e hermeticity).
+
+**Verification:** 293 unit tests and all 39 e2e assertions pass. Exercised
+end-to-end with the built binary: a `:run` task fetched a `file://` git dep
+into `$XDG_CACHE_HOME/rite/gitlibs/...` with only `XDG_CACHE_HOME` set, into
+`~/.cache/rite/gitlibs/...` with neither var set, and a relative
+`XDG_CACHE_HOME` was ignored (fell back to the HOME default, nothing written
+into the project).
+
+**Deviations:** one — codex review (P2) flagged that the XDG spec requires
+`XDG_CACHE_HOME` to be absolute; added a `path/absolute?` guard plus a
+regression test (`6c339d7`). Codex approved the docs commit with no findings.
+
+**What the plan could have specified better:** the XDG spec's
+relative-path rule — the plan said "non-blank" where it should have said
+"non-blank and absolute". Otherwise it held up.
