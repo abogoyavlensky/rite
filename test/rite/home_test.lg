@@ -11,18 +11,18 @@
 
 (deftest root-prefers-rite-home
   (os/setenv "RITE_HOME" "/tmp/rite-home-test")
-  (os/setenv "LGX_HOME" "/tmp/lgx-home-test")
+  (os/setenv "XDG_CACHE_HOME" "/tmp/xdg-cache-test")
   (is (= "/tmp/rite-home-test" (home/root)))
   (os/setenv "RITE_HOME" "")
-  (os/setenv "LGX_HOME" ""))
+  (os/setenv "XDG_CACHE_HOME" ""))
 
-(deftest root-falls-back-to-lgx-home
+(deftest root-falls-back-to-xdg-cache-home
   (os/setenv "RITE_HOME" "")
-  (os/setenv "LGX_HOME" "/tmp/lgx-home-test")
-  (is (= "/tmp/lgx-home-test" (home/root)))
-  (os/setenv "LGX_HOME" ""))
+  (os/setenv "XDG_CACHE_HOME" "/tmp/xdg-cache-test")
+  (is (= "/tmp/xdg-cache-test/rite" (home/root)))
+  (os/setenv "XDG_CACHE_HOME" ""))
 
-(deftest root-defaults-to-home-dot-lgx
+(deftest root-defaults-to-home-dot-cache-rite
   (os/setenv "RITE_HOME" "")
-  (os/setenv "LGX_HOME" "")
-  (is (= (path/join (os/getenv "HOME") ".lgx") (home/root))))
+  (os/setenv "XDG_CACHE_HOME" "")
+  (is (= (path/join (os/getenv "HOME") ".cache" "rite") (home/root))))

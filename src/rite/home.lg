@@ -4,12 +4,11 @@
 
 (defn root
   "Return the rite state root for the gitlibs cache. RITE_HOME wins; else
-   LGX_HOME (so deps fetched by lgx are reused, and vice versa); else the
-   default ~/.lgx."
+   $XDG_CACHE_HOME/rite; else the default ~/.cache/rite."
   []
   (let [rite-home (os/getenv "RITE_HOME")
-        lgx-home (os/getenv "LGX_HOME")]
+        xdg-cache (os/getenv "XDG_CACHE_HOME")]
     (cond
       (not (str/blank? rite-home)) rite-home
-      (not (str/blank? lgx-home)) lgx-home
-      :else (path/join (os/getenv "HOME") ".lgx"))))
+      (not (str/blank? xdg-cache)) (path/join xdg-cache "rite")
+      :else (path/join (os/getenv "HOME") ".cache" "rite"))))
