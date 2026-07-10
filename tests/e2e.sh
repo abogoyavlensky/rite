@@ -8,6 +8,10 @@
 
 set -eu
 
+# Every scenario sets its own RITE_HOME, but blank XDG_CACHE_HOME anyway so a
+# caller's value can never leak into the default-home fallback.
+export XDG_CACHE_HOME=""
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RITE="$ROOT/bin/rite"
 

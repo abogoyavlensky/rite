@@ -7,8 +7,9 @@
 ;; ---------------------------------------------------------------------------
 ;; Cache layout
 ;;
-;; <home>/gitlibs/<host>/<owner>/<repo>/<ref>/  (home = rite.home/root, shared
-;; with lgx by default)
+;; <home>/gitlibs/<host>/<owner>/<repo>/<ref>/  (home = rite.home/root,
+;; defaulting to $XDG_CACHE_HOME/rite or ~/.cache/rite; the layout matches
+;; lgx, so RITE_HOME=~/.lgx shares lgx's cache)
 ;;
 ;; Each leaf is a checked-out worktree pinned to a ref: a full sha for
 ;; :git/sha coords, or a sanitized tag name for :git/tag coords. The directory

@@ -201,8 +201,8 @@ These set the basis for a task's `:run` steps and have no effect on `:sh` steps.
 puts the project root and these directories on the script's namespace search
 path, so a `:run` script can require project namespaces.
 
-`:deps` fetches let-go libraries into a shared cache. A coordinate is a git
-dependency or a local one:
+`:deps` fetches let-go libraries into a per-user cache shared across projects
+(see `RITE_HOME` below). A coordinate is a git dependency or a local one:
 
 ```edn
 :deps {owner/lib {:git/url "https://github.com/owner/lib"
@@ -261,7 +261,7 @@ rite --verbose <task>    # also print the resolved :run invocation and env
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `RITE_HOME` | `$LGX_HOME`, else `~/.lgx` | State root for the dependency cache. rite shares lgx's cache by default, so a dependency fetched by either tool is reused by the other. |
+| `RITE_HOME` | `$XDG_CACHE_HOME/rite`, else `~/.cache/rite` | State root for the dependency cache. The layout matches lgx's, so set `RITE_HOME=~/.lgx` to reuse lgx's cache. A relative `XDG_CACHE_HOME` is ignored, per the XDG spec. |
 | `RITE_NO_COLOR` | unset | Set to any non-empty value to disable colored headers and step markers. |
 
 ## Development
