@@ -13,3 +13,4 @@ lsp/
 .clj-pulse
 .tmp/
 .clj-kondo/.cache/
+rite.edn
