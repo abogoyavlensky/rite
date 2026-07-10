@@ -96,7 +96,7 @@ error. An empty `{}` is valid.
           :args [{:name :env :type [:enum "prod" "staging"]}]
           :depends [check [notify :arg/env]]
           :do [{:sh ["./deploy.sh" :arg/env]}
-               {:sh "echo released {{version}}"}]}
+               {:sh "echo released {{var/version}}"}]}
 
   notify {:args [{:name :env}]
           :deps {tiny-cli {:git/url "https://github.com/abogoyavlensky/tiny-cli"
@@ -108,8 +108,8 @@ error. An empty `{}` is valid.
 ### `:vars`
 
 A map of unqualified keyword to string or number. Numbers become strings. Vars
-are flat: one var cannot reference another. Reference a var as `{{name}}` in any
-step string or as `:var/name` in a step vector.
+are flat: one var cannot reference another. Reference a var as `{{var/name}}` in
+any step string or as `:var/name` in a step vector.
 
 ### Tasks
 
@@ -144,13 +144,17 @@ A step value can reference the task's bound args and the project vars two ways:
 - `:arg/<name>` and `:var/<name>` keywords in a **vector** substitute the whole
   item. In `:sh` the value is shell-quoted (so a value with spaces stays one
   argument); in `:run` it is passed verbatim.
-- `{{name}}` in any **string** splices the value in raw, with no quoting. rite
-  looks up `name` as an arg first, then as a var, so an arg shadows a var of the
-  same name. An unknown `{{...}}` token passes through untouched.
+- `{{arg/<name>}}` and `{{var/<name>}}` tokens in any **string** splice the
+  value in raw, with no quoting. Whitespace inside the delimiters is
+  insignificant: `{{ var/version }}` works the same as `{{var/version}}`.
 
-rite validates keyword placeholders when it loads the config: an `:arg/*` must
-name a declared arg, a `:var/*` must name a defined var. `{{...}}` tokens are
-never a load error.
+Any other `{{...}}` content is not a token and passes through untouched —
+`{{name}}`, `{{ github.sha }}`, an unclosed `{{` — so text destined for other
+template tools is safe inside step strings.
+
+rite validates both placeholder forms when it loads the config: an `arg/*`
+placeholder must name a declared arg, a `var/*` placeholder must name a
+defined var.
 
 #### `:args`
 
@@ -176,8 +180,8 @@ value prints the error and the usage line, then exits 1.
 `:depends` is a vector of entries that run before the task's own steps,
 depth-first and in listed order. An entry is either a task symbol (`fmt`) or a
 vector `[task-sym item...]` that passes arguments to the dependency. Each item is
-a string (with `{{...}}` expansion), `:arg/<name>` (forwarding this task's bound
-arg), or `:var/<name>`.
+a string (with `{{arg/*}}`/`{{var/*}}` expansion), `:arg/<name>` (forwarding this
+task's bound arg), or `:var/<name>`.
 
 ```edn
 deploy {:args [{:name :env :type [:enum "prod" "staging"]}]

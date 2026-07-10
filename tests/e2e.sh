@@ -138,17 +138,28 @@ assert_not_contains "$out" "after" ":sh fail: later step skipped"
 rm -rf "$proj" "$home"
 
 # ---------------------------------------------------------------------------
-echo "==> Scenario 3: {{var}} + :var/kw substitution (incl. shell-quoting)"
+echo "==> Scenario 3: {{var/*}} + :var/kw substitution (incl. shell-quoting)"
 proj="$(mktemp -d)"; home="$(mktemp -d)"
 cat > "$proj/rite.edn" <<'EOF'
 {:vars {:version "1.2.0" :greeting "hi there"}
- :tasks {tmpl {:do [{:sh "echo v{{version}}"}]}
-         kw   {:do [{:sh ["echo" :var/greeting]}]}}}
+ :tasks {tmpl {:do [{:sh "echo v{{var/version}}"}]}
+         kw   {:do [{:sh ["echo" :var/greeting]}]}
+         raw  {:do [{:sh "echo '{{ untouched }}'"}]}}}
 EOF
 out="$(cd "$proj" && RITE_HOME="$home" "$RITE" tmpl 2>/dev/null)"
-assert_eq "$out" "v1.2.0" "{{var}}: expands in :sh string"
+assert_eq "$out" "v1.2.0" "{{var/*}}: expands in :sh string"
 out="$(cd "$proj" && RITE_HOME="$home" "$RITE" kw 2>/dev/null)"
 assert_eq "$out" "hi there" ":var/kw: shell-quoted, spaces stay one arg"
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" raw 2>/dev/null)"
+assert_eq "$out" "{{ untouched }}" "non-token {{...}}: passes through verbatim"
+
+# unknown prefixed token is a load error
+cat > "$proj/rite.edn" <<'EOF'
+{:tasks {tmpl {:do [{:sh "echo v{{var/missing}}"}]}}}
+EOF
+set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" tmpl 2>&1)"; rc=$?; set -e
+[[ $rc -eq 1 ]] || fail "unknown {{var/*}} token: expected exit 1 (got $rc)"
+assert_contains "$out" "placeholder :var/missing" "unknown {{var/*}} token: load error message"
 rm -rf "$proj" "$home"
 
 # ---------------------------------------------------------------------------
@@ -157,7 +168,7 @@ proj="$(mktemp -d)"; home="$(mktemp -d)"
 cat > "$proj/rite.edn" <<'EOF'
 {:tasks {deploy {:args [{:name :env :type [:enum "prod" "staging"]}
                         {:name :tag :default "latest"}]
-                 :do [{:sh "echo {{env}} {{tag}}"}]}
+                 :do [{:sh "echo {{arg/env}} {{arg/tag}}"}]}
          noargs {:do [{:sh "echo hi"}]}}}
 EOF
 out="$(cd "$proj" && RITE_HOME="$home" "$RITE" deploy prod 2>/dev/null)"
@@ -189,10 +200,10 @@ rm -rf "$proj" "$home"
 
 proj="$(mktemp -d)"; home="$(mktemp -d)"
 cat > "$proj/rite.edn" <<'EOF'
-{:tasks {notify {:args [{:name :env}] :do [{:sh "echo notify-{{env}}"}]}
+{:tasks {notify {:args [{:name :env}] :do [{:sh "echo notify-{{arg/env}}"}]}
          deploy {:args [{:name :env :type [:enum "prod" "staging"]}]
                  :depends [[notify :arg/env]]
-                 :do [{:sh "echo deploy-{{env}}"}]}}}
+                 :do [{:sh "echo deploy-{{arg/env}}"}]}}}
 EOF
 out="$(cd "$proj" && RITE_HOME="$home" "$RITE" deploy prod 2>/dev/null)"
 assert_eq "$out" "notify-prod
