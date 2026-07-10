@@ -99,8 +99,8 @@ error. An empty `{}` is valid.
                {:sh "echo released {{version}}"}]}
 
   notify {:args [{:name :env}]
-          :deps {abogoyavlensky/tiny-cli {:git/url "https://github.com/abogoyavlensky/tiny-cli"
-                                          :git/tag "0.1.0"}}
+          :deps {tiny-cli {:git/url "https://github.com/abogoyavlensky/tiny-cli"
+                           :git/tag "0.1.0"}}
           :paths ["scripts"]
           :do {:run ["scripts/notify.lg" :arg/env]}}}}
 ```
