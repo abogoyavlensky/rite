@@ -117,9 +117,11 @@ Each task is a map. The keys are `:doc`, `:args`, `:do`, `:depends`, `:deps`,
 and `:paths`; any other key is an error. A task needs at least a `:do` or a
 `:depends`.
 
-Task names are symbols (`fmt`, not `:fmt`). These names are reserved for the
-built-in commands and cannot be task names: `help`, `version`, `tasks`,
-`completion`, `__complete`.
+Task names are symbols (`fmt`, not `:fmt`). These names are reserved and cannot
+be task names: `tasks` (the built-in command), plus `completion` and
+`__complete` (reserved for a future shell-completion command). `help` and
+`version` are flags (`-h`/`--help`, `-v`/`--version`), not commands, so they are
+free to use as task names.
 
 #### `:do` steps
 
@@ -253,10 +255,10 @@ not available to task scripts. Read files with `slurp` instead.
 ## CLI
 
 ```
-rite                     # usage and task list (same as `rite help`)
-rite help | -h | --help  # same
+rite                     # usage and task list
+rite -h | --help         # show this help
+rite -v | --version      # print the version
 rite tasks               # just the task list
-rite version             # print the version
 rite <task> [args...]    # run a task
 rite --verbose <task>    # also print the resolved :run invocation and env
 ```
