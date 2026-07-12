@@ -3,7 +3,8 @@
  :main "main.lg"
  :lg-version "1.11.1"
  :targets {:bin {:out "bin/rite"}}
- :deps {}
+ :deps {abogoyavlensky/shapelet {:git/url "https://github.com/abogoyavlensky/shapelet"
+                                 :git/tag "v0.1.0"}}
  :tasks {fmt {:doc "Format source files (available actions: fix, check; default: fix)"
               :args [{:name :action
                       :type [:enum "fix" "check"]

@@ -2,7 +2,7 @@
   (:require [edn]
             [rite.args :as args]
             [rite.path :as path]
-            [rite.spec :as spec]
+            [shapelet.core :as spec]
             [string :as str]))
 
 (def config-name "rite.edn")
@@ -36,7 +36,8 @@
   #{"help" "version" "tasks" "completion" "__complete"})
 
 ;; ---------------------------------------------------------------------------
-;; rite.edn format as one schema value (see rite.spec for the schema language)
+;; rite.edn format as one schema value (see shapelet.core for the schema
+;; language)
 ;; ---------------------------------------------------------------------------
 
 (defn- rel-path-errors
