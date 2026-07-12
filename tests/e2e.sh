@@ -392,7 +392,7 @@ rm -rf "$nop"
 bad="$(mktemp -d)"; echo '{:tasks {bad {}}}' > "$bad/rite.edn"
 set +e; out="$(cd "$bad" && RITE_HOME="$home" "$RITE" __complete "" 2>/dev/null)"; rc=$?; set -e
 [[ $rc -eq 0 ]] || fail "completion invalid-config: expected exit 0 (got $rc)"
-assert_eq "$out" "tasks" "completion invalid-config: only built-in, no leaked task"
+assert_eq "$out" $'install\ntasks' "completion invalid-config: only built-ins, no leaked task"
 rm -rf "$bad"
 
 # `completion <shell>` prints a script; unknown shell exits 1.
@@ -406,6 +406,69 @@ set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" completion nope 2>&1)"; r
 out="$(cd "$proj" && RITE_HOME="$home" "$RITE" --help)"
 assert_not_contains "$out" "completion" "completion: hidden from help"
 rm -rf "$proj" "$home"
+
+# ---------------------------------------------------------------------------
+echo "==> Scenario 10: rite install fetches every task's :deps"
+if command -v git >/dev/null 2>&1; then
+    home="$(mktemp -d)"
+    bare="$home/_fixtures/greet.git"
+    mkdir -p "$(dirname "$bare")"
+    sha="$(make_bare_repo "$bare")"
+    proj="$(mktemp -d)"
+    cat > "$proj/rite.edn" <<EOF
+{:tasks
+ {say  {:doc "Run a script via a git dep"
+        :deps {test/greet {:git/url "file://$bare"
+                           :git/sha "$sha"}}
+        :do [{:sh "echo hi"}]}
+  noop {:do [{:sh "echo noop"}]}}}
+EOF
+    # First run fetches the single dep and reports it.
+    out="$(cd "$proj" && RITE_HOME="$home" "$RITE" install 2>&1)"
+    assert_contains "$out" "installing 1 dep(s)..." "install: first run installs the dep"
+    assert_contains "$out" "done: 1 installed" "install: first run reports installed"
+    [[ -d "$home/gitlibs/_local/_/greet/$sha" ]] \
+        || fail "install: dep not fetched at \$RITE_HOME/gitlibs/_local/_/greet/$sha"
+    pass "install: dep fetched into \$RITE_HOME/gitlibs"
+    # Second run is idempotent: nothing clones, everything is cached.
+    out="$(cd "$proj" && RITE_HOME="$home" "$RITE" install 2>&1)"
+    assert_contains "$out" "already cached" "install: second run reports cached"
+    assert_not_contains "$out" "installing" "install: second run clones nothing"
+    # install is offered at the command position.
+    out="$(cd "$proj" && RITE_HOME="$home" "$RITE" __complete "")"
+    assert_contains "$out" "install" "install: completion offers install"
+    rm -rf "$proj" "$home"
+else
+    skip "install scenario requires git"
+fi
+
+# A project with no :deps anywhere: nothing to install, exit 0 (no git needed).
+nodeps="$(mktemp -d)"; ndhome="$(mktemp -d)"
+cat > "$nodeps/rite.edn" <<'EOF'
+{:tasks {build {:do [{:sh "echo build"}]}}}
+EOF
+set +e; out="$(cd "$nodeps" && RITE_HOME="$ndhome" "$RITE" install 2>&1)"; rc=$?; set -e
+[[ $rc -eq 0 ]] || fail "install no-deps: expected exit 0 (got $rc)"
+assert_contains "$out" "no dependencies to install" "install no-deps: message"
+rm -rf "$nodeps" "$ndhome"
+
+# A fetch failure (dep points at a repo that was never created) exits 1 with a
+# clean one-line error rather than a stack trace.
+if command -v git >/dev/null 2>&1; then
+    failproj="$(mktemp -d)"; failhome="$(mktemp -d)"
+    cat > "$failproj/rite.edn" <<EOF
+{:tasks
+ {broken {:deps {test/nope {:git/url "file://$failhome/_fixtures/nope.git"
+                            :git/sha "0000000000000000000000000000000000000000"}}
+          :do [{:sh "echo hi"}]}}}
+EOF
+    set +e; out="$(cd "$failproj" && RITE_HOME="$failhome" "$RITE" install 2>&1)"; rc=$?; set -e
+    assert_eq "$rc" "1" "install fetch-failure: exit 1"
+    assert_contains "$out" "rite: install:" "install fetch-failure: clean error"
+    rm -rf "$failproj" "$failhome"
+else
+    skip "install fetch-failure scenario requires git"
+fi
 
 # ---------------------------------------------------------------------------
 echo

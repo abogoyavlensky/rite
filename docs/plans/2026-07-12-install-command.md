@@ -271,7 +271,7 @@ binary: `lgx build` (→ `bin/rite`). Full build + unit + e2e: `bash tests/run.s
 - Modify: `src/rite/completion.lg`
 - Test: `test/rite/completion_test.lg`
 
-- [ ] **Step 1: Update the failing tests**
+- [x] **Step 1: Update the failing tests**
   In `test/rite/completion_test.lg`, update the command-position expectations to
   include `"install"` (sorts between `foo/bar` and `lint`, before `tasks`):
   - `command-position-lists-builtins-and-tasks-sorted` →
@@ -280,22 +280,26 @@ binary: `lgx build` (→ `bin/rite`). Full build + unit + e2e: `bash tests/run.s
   - `command-position-drops-shell-unsafe-task-name` → `["install" "safe" "tasks"]`.
   (`command-position-prefix-filters` "ta" stays `["tasks"]` — no change.)
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
   Run: `lgx test test/rite/completion_test.lg`
   Expected: FAIL (candidates omit `install`).
+  > Result: the 3 command-position tests failed; `command-position-prefix-filters`
+  > (the "ta" case) still passed, as expected.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
   In `src/rite/completion.lg`, change `builtin-commands` to
   `["install" "tasks"]` (keep the comment naming `dispatch` in `main.lg` as the
   source of truth).
 
-- [ ] **Step 4: Run the full unit suite + smoke-check `__complete`**
+- [x] **Step 4: Run the full unit suite + smoke-check `__complete`**
   Run: `lgx test` (PASS), then `lgx build >/dev/null` and, from the repo root:
   - `./bin/rite __complete ""` → includes `install`, `fmt`, `lint`, `check`,
     `tasks`.
   - `./bin/rite __complete inst` → `install`.
+  > Result: 284 tests / 357 assertions, 0 failures; `__complete ""` →
+  > `check fmt install lint tasks`; `__complete inst` → `install`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat: complete the install built-in command"`
 
 ### Task 4: E2E Scenario 10
