@@ -60,7 +60,7 @@
          "  (omitted — rite.edn is invalid; run a task to see the errors)\n")
 
     :else
-    (when-let [rows (task-rows (config/tasks (:cfg loaded)))]
+    (when-let [rows (task-rows (config/visible-tasks (:cfg loaded)))]
       (str "\nTasks:\n" rows "\n"))))
 
 ;; Assembled at call time so the colored titles honor RITE_NO_COLOR at runtime.

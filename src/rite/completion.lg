@@ -9,8 +9,10 @@
 ;; bundled bash/zsh/fish scripts and the two I/O handlers. Candidates are
 ;; offered at the command position (task names + the `tasks` built-in) and at
 ;; task arg positions whose decl :type is [:enum ...] — no flag completion, no
-;; other argument completion. Isolated from rite.main so it can be unit-tested
-;; (rite.main's load runs (main)).
+;; other argument completion. :private? tasks are excluded (project-tasks reads
+;; config/visible-tasks), so they neither complete as names nor complete their
+;; args. Isolated from rite.main so it can be unit-tested (rite.main's load
+;; runs (main)).
 ;; --------------------------------------------------------------------------
 
 ;; Non-flag commands offered at the command position. The dispatch case in
@@ -199,7 +201,7 @@ complete -c rite -n 'not __rite_complete' -F
           (when-let [cfg (:cfg (config/load-config project))]
             (into {}
                   (map (fn [[k task]] [(str k) (:args task)])
-                       (config/tasks cfg)))))
+                       (config/visible-tasks cfg)))))
         {})
     (catch e {})))
 

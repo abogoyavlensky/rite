@@ -27,7 +27,7 @@
 (defn- cmd-tasks! []
   (let [project (config/find-project!)
         cfg (config/load-config! project)
-        t (config/tasks cfg)]
+        t (config/visible-tasks cfg)]
     (if (empty? t)
       (println "no tasks defined in rite.edn")
       (println (help/task-rows t)))))

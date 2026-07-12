@@ -104,25 +104,25 @@ unknown key :extra-deps (allowed: :doc, :args, :do, :depends, :deps, :paths, :pr
 - Modify: `src/rite/config.lg`
 - Test: `test/rite/config_test.lg`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
   In `config_test.lg` add:
   - accepts `:private? true` and `:private? false` (load succeeds, `:cfg` present) on an otherwise valid task.
   - rejects a non-boolean: `{'fmt {:private? "yes" :do [{:sh "echo hi"}]}}` → `{:errors [{:path [:tasks 'fmt :private?] :msg "must be true or false, got \"yes\""}]}`.
   - `config/visible-tasks` drops private tasks: given a cfg with a visible `fmt` and a private `secret {:private? true ...}`, returns only `fmt`; a cfg of only private tasks returns `{}`; passthrough of a cfg with no `:tasks` returns `{}`.
   Also update `load-rejects-task-with-unknown-key` (currently around line 209) so its expected message ends with `:paths, :private?)` — see the shared "Resulting closed-map error message" above.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
   Run: `lgx test`
   Expected: FAIL — the new `:private?` cases error on the closed-map (unknown key `:private?`), `visible-tasks` is unresolved, and the updated allowed-keys assertion mismatches.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
   In `config.lg`: add the `private-errors` predicate (see shared shape) near the other task-level `[:fn]` predicates; add `[:private? {:optional true} [:fn private-errors]]` as the **last** entry of `task-schema`'s closed map; add the `visible-tasks` helper (see shared shape) beside `tasks`/`vars`.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
   Run: `lgx test`
   Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -am "feat: add :private? task flag to config schema"`
 
 ## Task 2: Route listing surfaces through `visible-tasks`

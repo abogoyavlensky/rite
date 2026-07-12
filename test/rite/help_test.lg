@@ -72,6 +72,14 @@
     (is (str/includes? b "rite fmt"))
     (is (str/includes? b "Format"))))
 
+(deftest tasks-block-omits-private
+  (let [b (help/tasks-block {:cfg {:tasks {'fmt {:doc "Format"
+                                                 :do [{:sh "f"}]}
+                                           'secret {:private? true
+                                                    :do [{:sh "s"}]}}}})]
+    (is (str/includes? b "rite fmt"))
+    (is (not (str/includes? b "secret")))))
+
 ;; ---------------------------------------------------------------------------
 ;; usage
 ;; ---------------------------------------------------------------------------
