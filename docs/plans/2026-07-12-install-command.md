@@ -352,21 +352,22 @@ binary: `lgx build` (→ `bin/rite`). Full build + unit + e2e: `bash tests/run.s
 **Files:**
 - Modify: `README.md`
 
-- [ ] **Step 1: Add a CLI row**
+- [x] **Step 1: Add a CLI row**
   In the `## CLI` code block, add a line (aligned with the block's other rows):
   `rite install             # fetch every task's :deps into the cache`.
 
-- [ ] **Step 2: Note it in the `:deps` section**
+- [x] **Step 2: Note it in the `:deps` section**
   In the `#### :deps and :paths` section, add one sentence: deps are fetched
   lazily on the first `:run` step that needs them, and `rite install` pre-fetches
   every task's `:deps` into the cache up front (idempotent; useful for editor
   navigation, CI, and offline work). Use the /writing-clearly skill.
 
-- [ ] **Step 3: Format check and final run**
+- [x] **Step 3: Format check and final run**
   Run: `lgx fmt check` then `lgx test`
   Expected: both pass.
+  > Result: cljfmt clean; 284 tests, 357 assertions, 0 failures.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
   `git commit -m "docs: document rite install"`
 
 ---
@@ -385,3 +386,48 @@ binary: `lgx build` (→ `bin/rite`). Full build + unit + e2e: `bash tests/run.s
   and 3 (update the test first, watch it fail, then implement).
 - `install-report-lines` is the shared contract between Task 1's implementation
   and its test — match the exact strings in the Design's Reporting section.
+
+---
+
+## Status: Completed (2026-07-13)
+
+All five tasks implemented, each committed and passed an independent Codex
+review (all five reviews returned no findings; the one P2 raised on Task 2 —
+`install` missing from completion — was resolved by Task 3 as the plan
+sequenced).
+
+**What was built:** `rite install` fetches every task's `:deps` (transitively)
+into the shared gitlibs cache and prints a summary. It calls `deps/ensure-all!`
+once per task with `:deps` (tasks visited sorted by name), so two tasks pinning
+different refs of the same lib both get fetched; the cache dedupes shared
+coords. Reporting is a pure `deps/install-report-lines` (dedupe by `:path`;
+three branches: nothing to install / all cached / installed+cached summary)
+printed by `deps/print-install-report!`. `cmd-install!` in `main.lg` wires it to
+a new `"install"` dispatch branch and turns a git-fetch failure into a clean
+`rite: install: <message>` + exit 1. `"install"` is reserved in `config.lg`,
+offered by shell completion (`builtin-commands`), shown in `--help`, and
+documented in the README.
+
+**Verification:** 284 unit tests / 357 assertions pass; full `bash tests/run.sh`
+(build + unit + 71 e2e assertions) green, including the new Scenario 10.
+`lgx fmt check` clean. Driven end to end by hand: cold `rite install` fetched a
+seeded `file://` dep, a second run reported "all 1 dep(s) already cached", and a
+subsequent `rite say` (`:run` step) used the dep **without re-fetching** —
+proving install warms the cache. The fetch-failure path was exercised (nonexistent
+repo → `rite: install:` + exit 1).
+
+**Deviations (all recorded inline at their task):**
+1. Ran `lgx fmt fix` after Task 1 — cljfmt reflowed the new test map literals
+   (formatting only).
+2. `lgx test` accepts only one file argument, so Task 2's two-file test command
+   was run once per file.
+3. Adding `install` to `builtin-commands` (Task 3) also changed **Scenario 9's**
+   invalid-config `__complete ""` output (now `install\ntasks`); updated that
+   existing `assert_eq` to `$'install\ntasks'` in Task 4 (intent unchanged).
+
+**What the plan could have specified better:** it flagged the *unit* assertions
+that adding `install` to `builtin-commands` would break, but missed the existing
+**e2e Scenario 9** invalid-config `assert_eq`, which pins the exact
+command-position candidate list and therefore also had to change. A plan that
+grep-checked every existing exact-match assertion against `builtin-commands`
+(not just the unit tests) would have listed it up front.
