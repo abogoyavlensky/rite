@@ -214,7 +214,7 @@ binary: `lgx build` (→ `bin/rite`). Full build + unit + e2e: `bash tests/run.s
 - Modify: `main.lg`, `src/rite/config.lg`, `src/rite/help.lg`
 - Test: `test/rite/config_test.lg`, `test/rite/help_test.lg`
 
-- [ ] **Step 1: Update the failing unit tests first**
+- [x] **Step 1: Update the failing unit tests first**
   - `test/rite/config_test.lg` → `load-rejects-reserved-task-names`: change the
     set assertion to
     `(is (= #{"tasks" "completion" "__complete" "install"}
@@ -223,11 +223,13 @@ binary: `lgx build` (→ `bin/rite`). Full build + unit + e2e: `bash tests/run.s
   - `test/rite/help_test.lg` → `usage-has-synopsis-and-sections`: add
     `(is (str/includes? u "rite install"))`.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
   Run: `lgx test test/rite/config_test.lg test/rite/help_test.lg`
   Expected: FAIL (`install` not yet reserved / not in help).
+  > Deviation: `lgx test` accepts only one file argument, so the two files were
+  > run separately. Both failed as expected.
 
-- [ ] **Step 3: Implement the command**
+- [x] **Step 3: Implement the command**
   - `src/rite/config.lg`: add `"install"` to `reserved-task-names` (update its
     doc comment to mention the install command).
   - `src/rite/help.lg`: add a row to `command-rows`, aligned to `doc-col` (31),
@@ -241,22 +243,29 @@ binary: `lgx build` (→ `bin/rite`). Full build + unit + e2e: `bash tests/run.s
     "rite: install: " (ex-message e) "\n"))` and `(os/exit 1)`. Add the branch
     `"install" (cmd-install!)` to `dispatch`, before the task fall-through.
 
-- [ ] **Step 4: Run the full unit suite**
+- [x] **Step 4: Run the full unit suite**
   Run: `lgx test`
   Expected: PASS.
+  > Result: 284 tests, 357 assertions, 0 failures.
 
-- [ ] **Step 5: Smoke-check the built binary**
+- [x] **Step 5: Smoke-check the built binary**
   Run: `lgx build >/dev/null` then, from the repo root (rite is itself a rite
   project — `rite.edn` declares `fmt`/`lint`/`check`, none with `:deps`):
   - `./bin/rite install` → `no dependencies to install`, exit 0.
   - `./bin/rite --help | grep -c "rite install"` → `1`.
   - In a fresh temp dir with no `rite.edn`: `./bin/rite install; echo exit=$?` →
     the "no rite.edn" error and `exit=1`.
+  > Result: all three checks passed (`no dependencies to install` exit 0; help
+  > row count 1; no-project error exit 1).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
   `git commit -m "feat: add rite install command"`
 
 ### Task 3: Completion offers `install`
+
+> Codex's Task 2 review flagged (P2) that `install` was not yet in
+> `builtin-commands`, so completion wouldn't offer it — resolved by this task,
+> as the plan sequenced.
 
 **Files:**
 - Modify: `src/rite/completion.lg`

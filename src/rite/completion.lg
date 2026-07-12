@@ -17,7 +17,7 @@
 ;; main.lg is the source of truth; keep this in sync with it. rite's other
 ;; entry points are flags (-h/-v/--help/--version), never completed; and
 ;; `completion`/`__complete` are deliberately absent (both hidden).
-(def builtin-commands ["tasks"])
+(def builtin-commands ["install" "tasks"])
 
 (defn- prompt-state
   "Classify the words typed before the cursor against rite's grammar
