@@ -31,7 +31,7 @@
       (println (help/task-rows t)))))
 
 (defn- unknown-task! [cmd]
-  (write! *err* (str "rite: '" cmd "' is not a task. See 'rite help'.\n"))
+  (write! *err* (str "rite: '" cmd "' is not a task. See 'rite --help'.\n"))
   (os/exit 1))
 
 (defn- run-task! [cmd rest-args project cfg verbose?]
@@ -66,13 +66,11 @@
 (defn- dispatch [cmd rest-args verbose?]
   (case cmd
     nil (print-usage!)
-    "help" (print-usage!)
     "-h" (print-usage!)
     "--help" (print-usage!)
-    "tasks" (cmd-tasks!)
-    "version" (cmd-version!)
     "-v" (cmd-version!)
     "--version" (cmd-version!)
+    "tasks" (cmd-tasks!)
     (run-task-cmd! cmd rest-args verbose?)))
 
 (defn- main []

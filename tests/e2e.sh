@@ -85,7 +85,7 @@ EOF
 
 # ---------------------------------------------------------------------------
 echo "==> Scenario 1: usage / tasks listing / no-project / empty tasks"
-out="$("$RITE" help)"
+out="$("$RITE" --help)"
 assert_contains "$out" "rite - task runner for any project" "help: synopsis"
 assert_contains "$out" "Usage: rite" "help: usage line"
 assert_contains "$out" "rite tasks" "help: lists tasks command"
@@ -94,12 +94,43 @@ assert_contains "$out" "rite tasks" "help: lists tasks command"
 out_bare="$("$RITE")"
 assert_contains "$out_bare" "Usage: rite" "bare rite: prints usage"
 
+# version flags: `-v` / `--version` print `rite <version>`
+ver="$(cat "$ROOT/resources/VERSION")"
+out="$("$RITE" --version)"
+assert_contains "$out" "rite $ver" "version: --version prints rite <version>"
+out="$("$RITE" -v)"
+assert_contains "$out" "rite $ver" "version: -v prints rite <version>"
+
+# `help` / `version` are no longer word-commands: in a project that doesn't
+# define them they fall through to task lookup and error as unknown tasks
+# (proves the dispatch cases are gone — old code would print usage/version).
+ftmiss="$(mktemp -d)"; ftmisshome="$(mktemp -d)"
+echo '{:tasks {noop {:do [{:sh "echo noop"}]}}}' > "$ftmiss/rite.edn"
+for word in help version; do
+  set +e; out="$(cd "$ftmiss" && RITE_HOME="$ftmisshome" "$RITE" "$word" 2>&1)"; rc=$?; set -e
+  [[ $rc -eq 1 ]] || fail "fall-through $word: expected exit 1 (got $rc)"
+  assert_contains "$out" "is not a task" "fall-through: '$word' is not a task"
+done
+rm -rf "$ftmiss" "$ftmisshome"
+
+# ...and a project MAY now define tasks named `help`/`version`; they run.
+ftproj="$(mktemp -d)"; fthome="$(mktemp -d)"
+cat > "$ftproj/rite.edn" <<'EOF'
+{:tasks {help    {:do [{:sh "echo custom-help-task"}]}
+         version {:do [{:sh "echo custom-version-task"}]}}}
+EOF
+out="$(cd "$ftproj" && RITE_HOME="$fthome" "$RITE" help)"
+assert_contains "$out" "custom-help-task" "fall-through: user help task runs"
+out="$(cd "$ftproj" && RITE_HOME="$fthome" "$RITE" version)"
+assert_contains "$out" "custom-version-task" "fall-through: user version task runs"
+rm -rf "$ftproj" "$fthome"
+
 proj="$(mktemp -d)"; home="$(mktemp -d)"
 cat > "$proj/rite.edn" <<'EOF'
 {:tasks {fmt {:doc "Format sources" :do [{:sh "echo fmt"}]}
          deploy {:doc "Deploy" :args [{:name :env}] :do [{:sh "echo d"}]}}}
 EOF
-out="$(cd "$proj" && RITE_HOME="$home" "$RITE" help)"
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" --help)"
 assert_contains "$out" "Tasks:" "help: shows Tasks block"
 assert_contains "$out" "rite fmt" "help: task row uses rite prefix"
 assert_contains "$out" "Format sources" "help: shows :doc"
