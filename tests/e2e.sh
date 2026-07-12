@@ -293,7 +293,7 @@ set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" t 2>&1)"; rc=$?; set -e
 [[ $rc -eq 1 ]] || fail "config unknown-task-key: expected exit 1 (got $rc)"
 assert_contains "$out" "unknown key :extra-deps" "config: unknown task key (typo) reported"
 
-echo '{:tasks {version {:do [{:sh "echo hi"}]}}}' > "$proj/rite.edn"
+echo '{:tasks {tasks {:do [{:sh "echo hi"}]}}}' > "$proj/rite.edn"
 set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" tasks 2>&1)"; rc=$?; set -e
 [[ $rc -eq 1 ]] || fail "config reserved-name: expected exit 1 (got $rc)"
 assert_contains "$out" "conflicts with built-in command" "config: reserved task name reported"
