@@ -14,12 +14,12 @@
 
 (def ^:private command-rows
   (str "  rite <task> [args...]        Run a task\n"
-       "  rite tasks                   List available tasks\n"
-       "  rite version                 Print version\n"
-       "  rite help                    Show this help\n"))
+       "  rite tasks                   List available tasks\n"))
 
 (def ^:private option-rows
-  (str "  --verbose                    Print resolved :run invocations and env before running\n"))
+  (str "  -h, --help                   Show this help\n"
+       "  -v, --version                Print version\n"
+       "  --verbose                    Print resolved :run invocations and env before running\n"))
 
 (defn- pad-right [s n]
   (let [c (count s)]
