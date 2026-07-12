@@ -114,8 +114,8 @@ any step string or as `:var/name` in a step vector.
 ### Tasks
 
 Each task is a map. The keys are `:doc`, `:args`, `:do`, `:depends`, `:deps`,
-and `:paths`; any other key is an error. A task needs at least a `:do` or a
-`:depends`.
+`:paths`, and `:private?`; any other key is an error. A task needs at least a
+`:do` or a `:depends`.
 
 Task names are symbols (`fmt`, not `:fmt`). These names are reserved and cannot
 be task names: `tasks` (the built-in command), plus `completion` and
@@ -225,6 +225,14 @@ rite fetches a task's `:deps` lazily, on the first `:run` step that needs them.
 To fetch every task's `:deps` up front — for editor navigation, CI, or offline
 work — run `rite install`. It is idempotent: deps already in the cache are left
 untouched.
+
+#### `:private?`
+
+`:private? true` hides a task from `rite --help`, `rite tasks`, and shell
+completion. The task still runs directly (`rite <name>`) and stays a valid
+`:depends` target, so it suits helper tasks that other tasks build on but that
+users rarely invoke by name. Omitting the key — or setting `:private? false` —
+leaves the task visible.
 
 ## `:run` steps: the embedded runtime
 

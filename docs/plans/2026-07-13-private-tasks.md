@@ -155,7 +155,7 @@ unknown key :extra-deps (allowed: :doc, :args, :do, :depends, :deps, :paths, :pr
 **Files:**
 - Modify: `tests/e2e.sh`
 
-- [ ] **Step 1: Extend Scenario 1 fixture and assertions**
+- [x] **Step 1: Extend Scenario 1 fixture and assertions**
   In the Scenario 1 project fixture (the `cat > "$proj/rite.edn"` block, ~line 129), add a private task, e.g.:
   ```edn
   {:tasks {fmt {:doc "Format sources" :do [{:sh "echo fmt"}]}
@@ -168,17 +168,19 @@ unknown key :extra-deps (allowed: :doc, :args, :do, :depends, :deps, :paths, :pr
   - Private task still runs directly: `rite secret` exits 0 and prints `secret-ran` (`assert_contains`).
   Keep the existing `fmt`/`deploy` assertions intact.
 
-- [ ] **Step 2: Assert a private task still works as a dependency**
+- [x] **Step 2: Assert a private task still works as a dependency**
   Simplest placement is Scenario 5 (`:depends`). Give one dependent task a private dependency and assert the private dep's output appears when the parent runs. If wiring this into Scenario 5's fixture is awkward, instead extend the Scenario 1 fixture's `check`-style aggregate to depend on `secret` and assert `secret-ran` appears. Choose whichever keeps the fixture readable; a direct-run assertion (Step 1) plus one depends assertion is enough.
+  > Deviation: kept both the direct-run and the depends assertion inside the Scenario 1 fixture (added a `top {:depends [secret]}` aggregate) rather than touching Scenario 5 — keeps all private-task behavior in one readable fixture.
 
-- [ ] **Step 3: Extend Scenario 9 (completion) assertions**
+- [x] **Step 3: Extend Scenario 9 (completion) assertions**
   Scenario 9 builds a completion fixture and calls `__complete`. Add a private task to that fixture and assert it is **not** among command-position candidates (empty `cur`): `assert_not_contains "$out" "secret" "completion: private task not offered"`. Mirror the existing `__complete` invocation style in that scenario.
+  > Deviation: named the completion-fixture private task `hidden` (not `secret`) to avoid substring overlap with other candidates; asserted `assert_not_contains "$out" "hidden"`.
 
-- [ ] **Step 4: Build and run e2e**
+- [x] **Step 4: Build and run e2e**
   Run: `lgx build && bash tests/e2e.sh`
   Expected: all scenarios pass, including the new private-task assertions.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -am "test: e2e coverage for :private? tasks"`
 
 ## Task 4: Documentation
