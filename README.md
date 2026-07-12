@@ -7,6 +7,37 @@ rite is a [let-go](https://github.com/nooga/let-go) program bundled into one
 executable, so the binary carries the full let-go compiler. `:run` steps
 execute let-go scripts in-process, with no separate `lg` on the machine.
 
+## Quickstart
+
+Put a `rite.edn` at your project root:
+
+```edn
+{:tasks
+ {fmt   {:doc "Format sources"
+         :do {:sh "cljfmt fix"}}
+
+  test  {:doc "Run the tests"
+         :do {:sh "go test ./..."}}
+
+  check {:doc "Format then test"
+         :depends [fmt test]}}}
+```
+
+Then:
+
+```bash
+brew install abogoyavlensky/tap/rite  # install rite on macOS or Linux
+
+rite              # print usage and the task list
+rite tasks        # print just the task list
+rite fmt          # run the fmt task
+rite check        # run fmt, then test
+```
+
+rite finds `rite.edn` by walking up from the current directory, so you can run
+tasks from any subdirectory.
+
+
 ## Installation
 
 ### With [Homebrew](https://brew.sh)
@@ -35,44 +66,6 @@ Or pin a version in `.mise.toml`:
 Download the archive for your platform from the
 [releases page](https://github.com/abogoyavlensky/rite/releases), extract it, and
 put `rite` on your `PATH`:
-
-```sh
-VERSION=0.1.0
-OS=$(uname -s | tr '[:upper:]' '[:lower:]')   # linux | darwin
-ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
-curl -sSL -o rite.tar.gz \
-  "https://github.com/abogoyavlensky/rite/releases/download/v${VERSION}/rite_${VERSION}_${OS}_${ARCH}.tar.gz"
-tar -xzf rite.tar.gz
-mv rite ~/.local/bin/
-```
-
-## Quickstart
-
-Put a `rite.edn` at your project root:
-
-```edn
-{:tasks
- {fmt   {:doc "Format sources"
-         :do {:sh "cljfmt fix"}}
-
-  test  {:doc "Run the tests"
-         :do {:sh "go test ./..."}}
-
-  check {:doc "Format then test"
-         :depends [fmt test]}}}
-```
-
-Then:
-
-```bash
-rite              # print usage and the task list
-rite tasks        # print just the task list
-rite fmt          # run the fmt task
-rite check        # run fmt, then test
-```
-
-rite finds `rite.edn` by walking up from the current directory, so you can run
-tasks from any subdirectory.
 
 ## `rite.edn` reference
 
@@ -354,3 +347,7 @@ and, once a task is typed, that argument's `[:enum ...]` values. It reads the
 enclosing project's `rite.edn`, so it always reflects the current project's
 tasks; outside a project, or with an invalid `rite.edn`, it stays quiet rather
 than erroring.
+
+## License
+
+MIT License. Copyright (c) 2026 Andrey Bogoyavlenskiy.
