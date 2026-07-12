@@ -236,3 +236,76 @@
       (doseq [{:keys [lib path]} new-installs]
         (println " " lib "->" path))
       (println "done"))))
+
+;; ---------------------------------------------------------------------------
+;; install command: fetch every task's :deps up front
+;; ---------------------------------------------------------------------------
+
+(defn install-all!
+  "Fetch every task's :deps (transitively) into the gitlibs cache, so later
+   :run steps hit no network. Runs ensure-all! once per task that declares
+   :deps — visiting tasks sorted by name for deterministic output — rather than
+   merging all tasks' :deps into one map: two tasks may legitimately pin
+   different refs of the same lib, and each resolves its own basis at run time,
+   so merging would silently skip pre-fetching the losing ref. The cache is
+   keyed by URL+ref, so a coord shared across tasks is fetched once (the second
+   task sees it cached). Returns the concatenated {:lib :path :installed?}
+   results across all tasks."
+  [project tasks-map]
+  (vec (mapcat (fn [k]
+                 (let [coords (vec (:deps (get tasks-map k)))]
+                   (if (empty? coords)
+                     []
+                     (ensure-all! project coords))))
+               (sort-by str (keys tasks-map)))))
+
+(defn- dedupe-by-path
+  "Collapse results sharing a :path to one entry (first wins for :lib/:path),
+   marking it :installed? true if any occurrence was. Preserves first-seen
+   order. A coord shared across tasks clones on the first ensure-all! and is
+   cached on the rest, so it should be counted once."
+  [results]
+  (loop [rs (seq results)
+         seen #{}
+         out []]
+    (if (nil? rs)
+      out
+      (let [r (first rs)
+            p (:path r)]
+        (if (contains? seen p)
+          (recur (next rs) seen
+                 (mapv (fn [e]
+                         (if (and (= (:path e) p) (:installed? r))
+                           (assoc e :installed? true)
+                           e))
+                       out))
+          (recur (next rs) (conj seen p) (conj out r)))))))
+
+(defn install-report-lines
+  "Summarize install-all! `results` as a vector of output lines. Dedupes by
+   :path first (a coord shared across tasks appears once). Over `total` deduped
+   deps and `n` newly installed:
+     total 0       -> [\"no dependencies to install\"]
+     n 0 (cached)  -> [\"all N dep(s) already cached\"]
+     otherwise     -> a header, one line per newly installed dep, then a done
+                      summary."
+  [results]
+  (let [deduped (dedupe-by-path results)
+        total (count deduped)
+        installed (filter :installed? deduped)
+        n (count installed)]
+    (cond
+      (zero? total) ["no dependencies to install"]
+      (zero? n) [(str "all " total " dep(s) already cached")]
+      :else
+      (vec (concat
+             [(str "installing " n " dep(s)...")]
+             (mapv (fn [{:keys [lib path]}] (str "  " lib " -> " path))
+                   installed)
+             [(str "done: " n " installed, " (- total n) " already cached")])))))
+
+(defn print-install-report!
+  "Print install-report-lines for `results` to stdout, one line each."
+  [results]
+  (doseq [l (install-report-lines results)]
+    (println l)))

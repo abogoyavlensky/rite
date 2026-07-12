@@ -284,3 +284,71 @@
                                              :git/sha sha-a}]])]
       (is (= ['ex/a 'ex/b] (mapv :lib results))))
     (os/sh "rm" "-rf" home)))
+
+;; ---------------------------------------------------------------------------
+;; install-report-lines (pure)
+;; ---------------------------------------------------------------------------
+
+(deftest install-report-lines-empty
+  (is (= ["no dependencies to install"]
+         (deps/install-report-lines []))))
+
+(deftest install-report-lines-all-cached
+  (is (= ["all 2 dep(s) already cached"]
+         (deps/install-report-lines
+           [{:lib 'a
+             :path "/p/a"
+             :installed? false}
+            {:lib 'b
+             :path "/p/b"
+             :installed? false}]))))
+
+(deftest install-report-lines-mixed
+  (is (= ["installing 1 dep(s)..."
+          "  a -> /p/a"
+          "done: 1 installed, 1 already cached"]
+         (deps/install-report-lines
+           [{:lib 'a
+             :path "/p/a"
+             :installed? true}
+            {:lib 'b
+             :path "/p/b"
+             :installed? false}]))))
+
+(deftest install-report-lines-dedupes-by-path
+  ;; Two tasks sharing a coord: the first clones (installed? true), the second
+  ;; sees it cached (installed? false). The dep collapses to one, counted as
+  ;; installed.
+  (is (= ["installing 1 dep(s)..."
+          "  a -> /p/a"
+          "done: 1 installed, 0 already cached"]
+         (deps/install-report-lines
+           [{:lib 'a
+             :path "/p/a"
+             :installed? true}
+            {:lib 'a
+             :path "/p/a"
+             :installed? false}]))))
+
+;; ---------------------------------------------------------------------------
+;; install-all! (cache pre-populated so nothing clones)
+;; ---------------------------------------------------------------------------
+
+(deftest install-all-fetches-each-tasks-deps
+  (let [home (str "/tmp/rite-install-all-test-" (rand-int 100000000))
+        sha-a "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        sha-b "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        dir-a (str home "/gitlibs/github.com/ex/a/" sha-a)
+        dir-b (str home "/gitlibs/github.com/ex/b/" sha-b)]
+    (os/setenv "RITE_HOME" home)
+    (mkdir (str dir-a "/src"))
+    (mkdir (str dir-b "/src"))
+    (let [tasks-map {'t1 {:deps {'ex/a {:git/url "https://github.com/ex/a"
+                                        :git/sha sha-a}}}
+                     't2 {:deps {'ex/b {:git/url "https://github.com/ex/b"
+                                        :git/sha sha-b}}}
+                     't3 {:do [{:sh "echo hi"}]}}
+          results (deps/install-all! "/tmp/project" tasks-map)]
+      (is (= #{'ex/a 'ex/b} (set (mapv :lib results))))
+      (is (every? #(= false (:installed? %)) results)))
+    (os/sh "rm" "-rf" home)))
