@@ -261,6 +261,7 @@ rite -v | --version      # print the version
 rite tasks               # just the task list
 rite <task> [args...]    # run a task
 rite --verbose <task>    # also print the resolved :run invocation and env
+rite completion <shell>  # print a bash/zsh/fish completion script
 ```
 
 ## Environment variables
@@ -307,3 +308,35 @@ platform binaries, publishes a GitHub Release, and updates the Homebrew formula
 in `abogoyavlensky/homebrew-tap`. This needs two one-time setup steps: a public
 `homebrew-tap` repo under your account, and a `HOMEBREW_TAP_TOKEN` repository
 secret (a PAT with write access to that tap).
+
+## Shell completions
+
+`rite` completes task names and a task's enum argument values on TAB. Load the
+script for your shell:
+
+**bash** — add to `~/.bashrc`:
+
+```bash
+source <(rite completion bash)
+```
+
+**zsh** — save it on your `fpath` (e.g. `~/.zfunc`, which must be on `fpath`
+before `compinit` runs):
+
+```zsh
+rite completion zsh > ~/.zfunc/_rite
+```
+
+Or source it directly from `~/.zshrc`: `source <(rite completion zsh)`.
+
+**fish** — save it where fish loads completions:
+
+```fish
+rite completion fish > ~/.config/fish/completions/rite.fish
+```
+
+Completion covers the command position (your project's task names plus `tasks`)
+and, once a task is typed, that argument's `[:enum ...]` values. It reads the
+enclosing project's `rite.edn`, so it always reflects the current project's
+tasks; outside a project, or with an invalid `rite.edn`, it stays quiet rather
+than erroring.
