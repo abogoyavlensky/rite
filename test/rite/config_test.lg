@@ -218,7 +218,7 @@
     (is (= {:errors [{:path [:tasks (symbol n)]
                       :msg (str "conflicts with built-in command \"" n "\"")}]}
            (load-cfg {:tasks {(symbol n) {:do [{:sh "echo hi"}]}}}))))
-  (is (= #{"tasks" "completion" "__complete"}
+  (is (= #{"tasks" "completion" "__complete" "install"}
          config/reserved-task-names)))
 
 ;; ---------------------------------------------------------------------------

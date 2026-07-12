@@ -82,6 +82,7 @@
     (is (str/includes? u "Commands:"))
     (is (str/includes? u "rite <task> [args...]"))
     (is (str/includes? u "rite tasks"))
+    (is (str/includes? u "rite install"))
     (is (str/includes? u "Options:"))
     (is (str/includes? u "-h, --help"))
     (is (str/includes? u "-v, --version"))

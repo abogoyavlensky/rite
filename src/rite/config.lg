@@ -30,11 +30,12 @@
 
 (def ^:private git-keys #{:git/url :git/sha :git/tag})
 
-;; Built-in CLI command that a project task may not shadow. completion and
-;; __complete are reserved for a future shell-completion command. (help and
-;; version are flags, not commands, so they can't be shadowed by a task name.)
+;; Built-in CLI commands that a project task may not shadow: tasks (list),
+;; install (fetch every task's :deps into the cache), and the hidden
+;; completion / __complete shell-completion entry points. (help and version are
+;; flags, not commands, so they can't be shadowed by a task name.)
 (def reserved-task-names
-  #{"tasks" "completion" "__complete"})
+  #{"tasks" "install" "completion" "__complete"})
 
 ;; ---------------------------------------------------------------------------
 ;; rite.edn format as one schema value (see shapelet.core for the schema

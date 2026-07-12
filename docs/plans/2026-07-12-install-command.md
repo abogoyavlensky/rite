@@ -154,7 +154,7 @@ binary: `lgx build` (→ `bin/rite`). Full build + unit + e2e: `bash tests/run.s
 - Modify: `src/rite/deps.lg`
 - Test: `test/rite/deps_test.lg`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
   In `test/rite/deps_test.lg`, add a section after the `ensure-all!` tests.
   - `install-report-lines` (pure — literal result vectors, no I/O):
     - `[]` → `["no dependencies to install"]`.
@@ -180,11 +180,11 @@ binary: `lgx build` (→ `bin/rite`). Full build + unit + e2e: `bash tests/run.s
     returns results whose `:lib` set is `#{ex/a ex/b}` (t3 contributes nothing),
     all `:installed? false`.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
   Run: `lgx test test/rite/deps_test.lg`
   Expected: FAIL (`install-all!`, `install-report-lines` undefined).
 
-- [ ] **Step 3: Implement in `rite.deps`**
+- [x] **Step 3: Implement in `rite.deps`**
   Add to `src/rite/deps.lg` (in the public API section):
   - `install-all! [project tasks-map]` — over the tasks **sorted by name**
     (`sort-by str (keys tasks-map)`), for each task with a non-empty `:deps` call
@@ -198,11 +198,14 @@ binary: `lgx build` (→ `bin/rite`). Full build + unit + e2e: `bash tests/run.s
     results)] (println l))`.
   Keep the existing `print-installs!` (still used by `resolve-basis!`) unchanged.
 
-- [ ] **Step 4: Run the deps suite, then the full unit suite**
+- [x] **Step 4: Run the deps suite, then the full unit suite**
   Run: `lgx test test/rite/deps_test.lg` then `lgx test`
   Expected: PASS (279 + new assertions, 0 failures).
+  > Result: deps 28 tests, full 284 tests / 355 assertions, 0 failures.
+  > Deviation: ran `lgx fmt fix` (cljfmt reflowed the new test map literals) —
+  > formatting only, no behavior change.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat: add install-all! and report helpers to rite.deps"`
 
 ### Task 2: `install` command — dispatch, handler, reserved name, help row

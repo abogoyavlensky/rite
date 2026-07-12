@@ -3,6 +3,7 @@
             [rite.cli :as cli]
             [rite.completion :as completion]
             [rite.config :as config]
+            [rite.deps :as deps]
             [rite.help :as help]
             [rite.plan :as plan]
             [rite.script :as script]
@@ -30,6 +31,20 @@
     (if (empty? t)
       (println "no tasks defined in rite.edn")
       (println (help/task-rows t)))))
+
+(defn- cmd-install! []
+  ;; Fetch every task's :deps into the gitlibs cache up front. A git-fetch
+  ;; failure throws from rite.deps; catch it for a clean one-line error rather
+  ;; than a stack trace. (An invalid dep lgx.edn is already handled inside
+  ;; ensure-all! via coords-at!, which reports and exits.)
+  (let [project (config/find-project!)
+        cfg (config/load-config! project)
+        t (config/tasks cfg)]
+    (try
+      (deps/print-install-report! (deps/install-all! project t))
+      (catch e
+             (do (write! *err* (str "rite: install: " (ex-message e) "\n"))
+                 (os/exit 1))))))
 
 (defn- unknown-task! [cmd]
   (write! *err* (str "rite: '" cmd "' is not a task. See 'rite --help'.\n"))
@@ -72,6 +87,7 @@
     "-v" (cmd-version!)
     "--version" (cmd-version!)
     "tasks" (cmd-tasks!)
+    "install" (cmd-install!)
     ;; Hidden shell-completion entry points (see rite.completion). Kept out of
     ;; help and out of TAB candidates; reserved in config/reserved-task-names.
     "completion" (completion/cmd-completion! rest-args)

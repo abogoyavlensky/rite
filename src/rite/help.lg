@@ -14,7 +14,8 @@
 
 (def ^:private command-rows
   (str "  rite <task> [args...]        Run a task\n"
-       "  rite tasks                   List available tasks\n"))
+       "  rite tasks                   List available tasks\n"
+       "  rite install                 Install all task dependencies\n"))
 
 (def ^:private option-rows
   (str "  -h, --help                   Show this help\n"
