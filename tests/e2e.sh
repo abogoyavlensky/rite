@@ -387,10 +387,12 @@ set +e; out="$(cd "$nop" && RITE_HOME="$home" "$RITE" __complete "" 2>&1)"; rc=$
 assert_contains "$out" "tasks" "completion no-project: still lists built-in"
 rm -rf "$nop"
 
-# ...and exits 0 with an invalid rite.edn (task names just drop out).
+# ...and exits 0 with an invalid rite.edn, dropping the task names (only the
+# built-in `tasks` survives — the invalid `bad` must not leak).
 bad="$(mktemp -d)"; echo '{:tasks {bad {}}}' > "$bad/rite.edn"
-set +e; out="$(cd "$bad" && RITE_HOME="$home" "$RITE" __complete "" 2>&1)"; rc=$?; set -e
+set +e; out="$(cd "$bad" && RITE_HOME="$home" "$RITE" __complete "" 2>/dev/null)"; rc=$?; set -e
 [[ $rc -eq 0 ]] || fail "completion invalid-config: expected exit 0 (got $rc)"
+assert_eq "$out" "tasks" "completion invalid-config: only built-in, no leaked task"
 rm -rf "$bad"
 
 # `completion <shell>` prints a script; unknown shell exits 1.
