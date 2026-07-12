@@ -1,6 +1,7 @@
 (ns rite.main
   (:require [rite.args :as args]
             [rite.cli :as cli]
+            [rite.completion :as completion]
             [rite.config :as config]
             [rite.help :as help]
             [rite.plan :as plan]
@@ -71,6 +72,10 @@
     "-v" (cmd-version!)
     "--version" (cmd-version!)
     "tasks" (cmd-tasks!)
+    ;; Hidden shell-completion entry points (see rite.completion). Kept out of
+    ;; help and out of TAB candidates; reserved in config/reserved-task-names.
+    "completion" (completion/cmd-completion! rest-args)
+    "__complete" (do (completion/complete! rest-args) (os/exit 0))
     (run-task-cmd! cmd rest-args verbose?)))
 
 (defn- main []

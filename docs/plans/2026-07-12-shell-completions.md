@@ -74,11 +74,21 @@ private `prompt-state` classifies `words`:
     (cond
       (str/starts-with? cur "-") []
       (= :command-position state)
-        (matches (concat builtin-commands (keys tasks)) cur)
+        (matches (filter shell-safe? (concat builtin-commands (keys tasks))) cur)
       (and (= :command-typed state) (contains? tasks command))
         (matches (or (enum-values (get tasks command) args-typed) []) cur)
       :else [])))
 ```
+
+**Task names are `shell-safe?`-filtered too** (not only enum values): task
+names are project-controlled symbols inserted onto the command line on TAB just
+like enum values, so the same never-insert-unsafe-syntax guarantee must cover
+them. EDN's symbol grammar already excludes the worst metacharacters (`()`,
+backtick, `;`, `|`, spaces, quotes), but `$ * ? < > &` remain possible; a task
+whose name contains one is omitted from completion (it still runs when typed by
+hand). Built-in names are inherently safe, so filtering the concatenated list is
+equivalent and simplest. (This is a deliberate, uniform hardening over lgx,
+which filters only enum values.)
 
 - `builtin-commands` is a `def` of `["tasks"]` (rite's only non-flag built-in),
   with a comment naming `dispatch` in `main.lg` as the source of truth.
@@ -193,6 +203,14 @@ assertions, 0 failures). Full build + unit + e2e: `bash tests/run.sh` (or
 
 ### Task 1: Pure candidate logic
 
+> Deviation (execution): the module is small and cohesive, so Tasks 1 and 2
+> (candidate logic + scripts + the `completion`/`__complete` dispatch wiring in
+> `main.lg`) were implemented and committed together, and the `__complete`
+> dispatch branch was pulled forward from Task 3. Behavior matches the plan.
+> Also, per the background Codex plan review, task-name candidates are now
+> `shell-safe?`-filtered too (not only enum values) — a uniform hardening; see
+> the Design note.
+
 **Files:**
 - Create: `src/rite/completion.lg`
 - Test: `test/rite/completion_test.lg`
@@ -206,7 +224,10 @@ assertions, 0 failures). Full build + unit + e2e: `bash tests/run.sh` (or
   - empty `words` + empty `cur` → `["foo/bar" "fmt" "lint" "tasks"]` (built-in
     `tasks` plus task names, sorted);
   - prefix filter: `cur "fm"` → `["fmt"]`; `cur "ta"` → `["tasks"]`;
-  - namespaced task `foo/bar` offered and prefix-matched by `cur "foo"`;
+  - namespaced task `foo/bar` offered and prefix-matched by `cur "foo"`
+    (`/` is in the shell-safe set, so namespaced names survive);
+  - a task name with an unsafe char (e.g. `"a$b"`) is omitted at the command
+    position;
   - empty `tasks` map → `["tasks"]` only;
   - `"completion"` and `"__complete"` never appear in output;
   - leading `["--verbose"]` before the cursor → command names still complete;

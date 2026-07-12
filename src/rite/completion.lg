@@ -1,0 +1,215 @@
+(ns rite.completion
+  (:require [rite.config :as config]
+            [string :as str]))
+
+;; --------------------------------------------------------------------------
+;; Shell TAB completion.
+;;
+;; Pure candidate logic for the hidden `rite __complete` endpoint, plus the
+;; bundled bash/zsh/fish scripts and the two I/O handlers. Candidates are
+;; offered at the command position (task names + the `tasks` built-in) and at
+;; task arg positions whose decl :type is [:enum ...] — no flag completion, no
+;; other argument completion. Isolated from rite.main so it can be unit-tested
+;; (rite.main's load runs (main)).
+;; --------------------------------------------------------------------------
+
+;; Non-flag commands offered at the command position. The dispatch case in
+;; main.lg is the source of truth; keep this in sync with it. rite's other
+;; entry points are flags (-h/-v/--help/--version), never completed; and
+;; `completion`/`__complete` are deliberately absent (both hidden).
+(def builtin-commands ["tasks"])
+
+(defn- prompt-state
+  "Classify the words typed before the cursor against rite's grammar
+   (`rite [--verbose]* <task> [args...]`). Any `-`-prefixed token is skipped so
+   a stray flag is never mistaken for the task. Returns a map whose :state is
+   :command-position (still completing the task name) or :command-typed — the
+   latter with :command (the typed task word) and :args-typed (how many args
+   follow it, i.e. the 0-indexed position of the arg under the cursor)."
+  [words]
+  (loop [ws (seq words)]
+    (cond
+      (nil? ws) {:state :command-position}
+      (str/starts-with? (first ws) "-") (recur (next ws))
+      :else {:state :command-typed
+             :command (first ws)
+             :args-typed (count (rest ws))})))
+
+;; Task names and enum values are arbitrary project-controlled strings, but
+;; completion candidates are inserted onto the shell command line on TAB. A
+;; value like `$(cmd)` or one with a metacharacter would be active syntax once
+;; accepted, so a malicious rite.edn could run code on a stray TAB. We only
+;; offer values made of inert characters; anything else is omitted from
+;; completion (the task/arg still runs when typed by hand). Covers realistic
+;; names/values (fmt, foo/bar, prod, us-east-1, v1.2.0) while excluding every
+;; shell metacharacter.
+(def ^:private shell-safe-re #"^[A-Za-z0-9._/:=+,@-]+$")
+
+(defn- shell-safe? [s]
+  (boolean (re-matches shell-safe-re s)))
+
+(defn- enum-values
+  "The shell-safe [:enum ...] values of the decl at position `idx` of `decls`,
+   or nil when there is no decl there or its :type isn't an enum. Config
+   validation guarantees an enum :type is a vector and the only vector :type."
+  [decls idx]
+  (let [decls (vec decls)
+        t (when (< idx (count decls)) (:type (nth decls idx)))]
+    (when (vector? t)
+      (filter shell-safe? (rest t)))))
+
+(defn- matches
+  "Sorted vector of the `values` that start with `cur`."
+  [values cur]
+  (vec (sort (filter (fn [c] (str/starts-with? c cur)) values))))
+
+(defn candidates
+  "Completion candidates for the rite command line. `words` are the typed
+   tokens before the cursor (binary name and `__complete` excluded), `cur` the
+   word being completed (may be \"\"), `tasks` a map of the project's task
+   names (strings, namespaces preserved) to their :args decls. Returns a
+   sorted, prefix-filtered vector: shell-safe built-in command and task names
+   at the command position, a task arg's declared [:enum ...] values at that
+   arg's position, else []; empty means \"nothing to offer\" and the shell
+   falls back to its default (file) completion."
+  [words cur tasks]
+  (let [{:keys [state command args-typed]} (prompt-state words)]
+    (cond
+      (str/starts-with? cur "-") []
+
+      (= :command-position state)
+      (matches (filter shell-safe? (concat builtin-commands (keys tasks))) cur)
+
+      (and (= :command-typed state) (contains? tasks command))
+      (matches (or (enum-values (get tasks command) args-typed) []) cur)
+
+      :else [])))
+
+;; --------------------------------------------------------------------------
+;; Bundled shell scripts (ported from lgx). String constants rather than
+;; io/resource: string constants resolve identically under `lgx test` (source)
+;; and the bundle with no resource-root uncertainty, and let the unit tests
+;; assert on script contents directly. Each script invokes the binary by the
+;; name it was called as, so install location is moot.
+;; --------------------------------------------------------------------------
+
+(def ^:private bash-script
+  "# bash completion for rite.
+# Load with: source <(rite completion bash)
+_rite_complete() {
+    local line
+    COMPREPLY=()
+    # __complete already prefix-filters, so candidates go straight into
+    # COMPREPLY. No compgen -W: it shell-expands the wordlist, which would
+    # execute project-controlled text (e.g. an enum value \"$(cmd)\").
+    while IFS= read -r line; do
+        [ -n \"$line\" ] && COMPREPLY+=(\"$line\")
+    done < <(\"${COMP_WORDS[0]}\" __complete \"${COMP_WORDS[@]:1:COMP_CWORD}\" 2>/dev/null)
+}
+
+# -o default: fall back to filename completion when rite offers nothing.
+complete -o default -F _rite_complete rite
+")
+
+(def ^:private zsh-script
+  "#compdef rite
+# zsh completion for rite.
+# Load with: source <(rite completion zsh)
+# or save on your fpath: rite completion zsh > ~/.zfunc/_rite
+
+_rite() {
+    local -a candidates
+    candidates=(\"${(@f)$(\"${words[1]}\" __complete \"${(@)words[2,CURRENT]}\" 2>/dev/null)}\")
+    if (( ${#candidates[@]} )) && [[ -n \"${candidates[1]}\" ]]; then
+        compadd -Q -a candidates
+    else
+        # Nothing to offer: fall back to default (filename) completion.
+        _default
+    fi
+}
+
+# On fpath, #compdef invokes _rite for us; when sourced, register it manually.
+if [[ \"${funcstack[1]}\" == \"_rite\" ]]; then
+    _rite \"$@\"
+else
+    compdef _rite rite
+fi
+")
+
+(def ^:private fish-script
+  "# fish completion for rite.
+# Load with: rite completion fish | source
+# or save it: rite completion fish > ~/.config/fish/completions/rite.fish
+function __rite_complete
+    set -l words (commandline -opc)
+    set -l cur (commandline -ct)
+    # \"$cur\" stays quoted: at an argument boundary it is empty and must
+    # still reach __complete as the word under the cursor.
+    set -g __rite_candidates ($words[1] __complete $words[2..-1] \"$cur\" 2>/dev/null)
+    test (count $__rite_candidates) -gt 0
+end
+
+# Dynamic candidates when rite offers any...
+complete -c rite -f -n '__rite_complete' -a '$__rite_candidates'
+# ...otherwise fall back to file completion.
+complete -c rite -n 'not __rite_complete' -F
+")
+
+(defn completion-script
+  "The bundled completion script for `shell`, or nil for an unknown shell."
+  [shell]
+  (case shell
+    "bash" bash-script
+    "zsh" zsh-script
+    "fish" fish-script
+    nil))
+
+(defn cmd-completion!
+  "Handler for the hidden `rite completion <shell>`: prints the script for
+   bash/zsh/fish to stdout; anything else errors to stderr and exits 1."
+  [args]
+  (let [args (vec args)]
+    (cond
+      (empty? args)
+      (do (write! *err* "rite: completion requires a shell argument (bash, zsh, or fish)\n")
+          (os/exit 1))
+
+      (> (count args) 1)
+      (do (write! *err* "rite: completion takes exactly one argument (bash, zsh, or fish)\n")
+          (os/exit 1))
+
+      :else
+      (if-let [script (completion-script (first args))]
+        (print script)
+        (do (write! *err* (str "rite: unsupported shell: " (first args)
+                               " (expected one of: bash, zsh, fish)\n"))
+            (os/exit 1))))))
+
+(defn- project-tasks
+  "Map of task name (string, namespaces preserved) → :args decls for the
+   project enclosing the cwd, or {} when there is no project or its rite.edn
+   is invalid. Uses the non-throwing config readers; its own try/catch keeps
+   built-in completion alive even if the config layer surprises."
+  []
+  (try
+    (or (when-let [project (config/find-project)]
+          (when-let [cfg (:cfg (config/load-config project))]
+            (into {}
+                  (map (fn [[k task]] [(str k) (:args task)])
+                       (config/tasks cfg)))))
+        {})
+    (catch e {})))
+
+(defn complete!
+  "I/O entry point for the hidden `rite __complete` call made by the shell
+   scripts. `argv` is the typed words after `__complete`; the last one is the
+   word under the cursor (possibly empty). Prints one candidate per line.
+   Never throws — a broken state must not break the user's shell — and never
+   exits; the dispatch branch exits 0 after it returns."
+  [argv]
+  (try
+    (let [words (vec (butlast argv))
+          cur (or (last argv) "")]
+      (doseq [c (candidates words cur (project-tasks))]
+        (println c)))
+    (catch e nil)))
