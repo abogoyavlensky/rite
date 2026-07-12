@@ -12,7 +12,7 @@
 
 ### Background
 
-rite's CLI is dispatched in `src/rite/main.lg` by the `dispatch` function on the
+rite's CLI is dispatched in `main.lg` (repo root) by the `dispatch` function on the
 first positional token. Today it recognizes these built-ins:
 
 ```clojure
@@ -92,7 +92,7 @@ Options:
 
 ## File Structure
 
-- `src/rite/main.lg` — `dispatch` (drop two cases), `unknown-task!` message.
+- `main.lg` (repo root) — `dispatch` (drop two cases), `unknown-task!` message.
 - `src/rite/config.lg` — `reserved-task-names` set + its comment (lines ~34-36).
 - `src/rite/help.lg` — `command-rows` / `option-rows` (lines ~15-22).
 - `test/rite/config_test.lg` — `reserved-task-names` equality assertion (~line 221).
@@ -183,11 +183,11 @@ Options:
 ### Task 3: Slim dispatch, fix message, extend e2e
 
 **Files:**
-- Modify: `src/rite/main.lg`
+- Modify: `main.lg` (repo root)
 - Modify: `tests/e2e.sh`
 
 - [ ] **Step 1: Remove the word-command cases**
-  In `src/rite/main.lg` `dispatch` (~lines 66-76), delete the `"help"` and
+  In `main.lg` (repo root) `dispatch` (~lines 66-76), delete the `"help"` and
   `"version"` cases, leaving `nil`, `"-h"`, `"--help"`, `"-v"`, `"--version"`,
   `"tasks"`, and the default `run-task-cmd!`.
 
@@ -206,9 +206,17 @@ Options:
     `rite ` and contains the VERSION contents (mirror how `$RITE`/`$ROOT` are
     already referenced in the file).
   - `rite -v` produces the same output as `rite --version`.
-  - bare-word `rite version` now errors: exit code 1 and output contains
-    `is not a task` (fall-through to unknown-task). Use the `set +e; ...; rc=$?;
-    set -e` pattern already used elsewhere in the file.
+  - Both word-commands now fall through to task lookup (this is what proves the
+    `"help"`/`"version"` cases are actually gone — a retained case would silently
+    pass a version-only smoke test):
+    - Outside any project (or in a project without such tasks), bare-word
+      `rite version` and `rite help` each error: exit code 1 with output
+      containing `is not a task`. Use the `set +e; ...; rc=$?; set -e` pattern
+      already used elsewhere.
+    - In a temp project whose `rite.edn` defines tasks named `version` and
+      `help` (now legal — see Task 1), `rite version` and `rite help` run those
+      tasks (assert their `:sh` echo output appears), confirming both relaxed
+      validation and fall-through dispatch in one scenario.
 
 - [ ] **Step 5: Run the full suite**
   Run: `bash tests/run.sh`
