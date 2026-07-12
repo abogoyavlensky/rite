@@ -131,23 +131,23 @@ unknown key :extra-deps (allowed: :doc, :args, :do, :depends, :deps, :paths, :pr
 - Modify: `src/rite/help.lg`, `main.lg`, `src/rite/completion.lg`
 - Test: `test/rite/help_test.lg`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
   In `help_test.lg` add a `tasks-block` test: given `{:cfg {:tasks {'fmt {:doc "Format" :do [{:sh "f"}]} 'secret {:private? true :do [{:sh "s"}]}}}}`, the rendered block includes `rite fmt` but not `secret`.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
   Run: `lgx test`
   Expected: FAIL — `tasks-block` still lists `secret` because it reads `config/tasks`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
   - `help.lg` `tasks-block`: change `(config/tasks (:cfg loaded))` → `(config/visible-tasks (:cfg loaded))`.
   - `main.lg` `cmd-tasks!`: change `(config/tasks cfg)` → `(config/visible-tasks cfg)`.
   - `completion.lg` `project-tasks`: change `(config/tasks cfg)` → `(config/visible-tasks cfg)`; update the ns doc comment (top of file, "Candidates are offered at the command position (task names + ...)") to note private tasks are excluded.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
   Run: `lgx test`
   Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -am "feat: hide :private? tasks from help, rite tasks, and completion"`
 
 ## Task 3: e2e coverage

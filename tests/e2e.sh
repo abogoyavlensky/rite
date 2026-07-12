@@ -128,17 +128,29 @@ rm -rf "$ftproj" "$fthome"
 proj="$(mktemp -d)"; home="$(mktemp -d)"
 cat > "$proj/rite.edn" <<'EOF'
 {:tasks {fmt {:doc "Format sources" :do [{:sh "echo fmt"}]}
-         deploy {:doc "Deploy" :args [{:name :env}] :do [{:sh "echo d"}]}}}
+         deploy {:doc "Deploy" :args [{:name :env}] :do [{:sh "echo d"}]}
+         secret {:doc "Hidden" :private? true :do [{:sh "echo secret-ran"}]}
+         top {:doc "Top" :depends [secret] :do [{:sh "echo top-ran"}]}}}
 EOF
 out="$(cd "$proj" && RITE_HOME="$home" "$RITE" --help)"
 assert_contains "$out" "Tasks:" "help: shows Tasks block"
 assert_contains "$out" "rite fmt" "help: task row uses rite prefix"
 assert_contains "$out" "Format sources" "help: shows :doc"
 assert_contains "$out" "rite deploy <env>" "help: shows arg signature"
+assert_not_contains "$out" "secret" "help: hides private task"
 
 out="$(cd "$proj" && RITE_HOME="$home" "$RITE" tasks)"
 assert_contains "$out" "rite fmt" "tasks: lists fmt"
 assert_not_contains "$out" "Usage:" "tasks: list only (no synopsis)"
+assert_not_contains "$out" "secret" "tasks: hides private task"
+
+# A private task still runs directly...
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" secret 2>/dev/null)"
+assert_contains "$out" "secret-ran" "private task runs directly"
+
+# ...and remains a valid :depends target.
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" top 2>/dev/null)"
+assert_contains "$out" "secret-ran" "private task runs as a dependency"
 
 noproj="$(mktemp -d)"
 set +e; out="$(cd "$noproj" && "$RITE" tasks 2>&1)"; rc=$?; set -e
@@ -355,7 +367,8 @@ proj="$(mktemp -d)"; home="$(mktemp -d)"
 cat > "$proj/rite.edn" <<'EOF'
 {:tasks {deploy {:args [{:name :env :type [:enum "prod" "staging"]}]
                  :do [{:sh "echo {{arg/env}}"}]}
-         build  {:do [{:sh "echo build"}]}}}
+         build  {:do [{:sh "echo build"}]}
+         hidden {:private? true :do [{:sh "echo hidden"}]}}}
 EOF
 
 # Command position: task names + the `tasks` built-in; hidden commands absent.
@@ -364,6 +377,7 @@ assert_contains "$out" "deploy" "completion: lists task deploy"
 assert_contains "$out" "build" "completion: lists task build"
 assert_contains "$out" "tasks" "completion: lists built-in tasks"
 assert_not_contains "$out" "__complete" "completion: hides __complete command"
+assert_not_contains "$out" "hidden" "completion: private task not offered"
 
 # Prefix filter at command position.
 out="$(cd "$proj" && RITE_HOME="$home" "$RITE" __complete dep)"
