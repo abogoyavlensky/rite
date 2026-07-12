@@ -69,6 +69,15 @@
   (let [cfg {:tasks {'foo/version {:do [{:sh "echo hi"}]}}}]
     (is (= {:cfg cfg} (load-cfg cfg)))))
 
+(deftest load-accepts-private-task
+  ;; :private? takes a boolean; true hides the task, false is the default.
+  (let [cfg {:tasks {'fmt {:doc "Format"
+                           :private? true
+                           :do [{:sh "echo fmt"}]}
+                     'lint {:private? false
+                            :do [{:sh "echo lint"}]}}}]
+    (is (= {:cfg cfg} (load-cfg cfg)))))
+
 ;; ---------------------------------------------------------------------------
 ;; load-config: :vars normalization (numbers -> strings)
 ;; ---------------------------------------------------------------------------
@@ -206,10 +215,16 @@
          (load-cfg {:tasks {'fmt {:doc 5
                                   :do [{:sh "echo hi"}]}}}))))
 
+(deftest load-rejects-non-boolean-private
+  (is (= {:errors [{:path [:tasks 'fmt :private?]
+                    :msg "must be true or false, got \"yes\""}]}
+         (load-cfg {:tasks {'fmt {:private? "yes"
+                                  :do [{:sh "echo hi"}]}}}))))
+
 (deftest load-rejects-task-with-unknown-key
   (is (= {:errors [{:path [:tasks 'dev]
                     :msg (str "unknown key :extra-deps (allowed: :doc, :args, "
-                              ":do, :depends, :deps, :paths)")}]}
+                              ":do, :depends, :deps, :paths, :private?)")}]}
          (load-cfg {:tasks {'dev {:extra-deps {}
                                   :do [{:sh "echo hi"}]}}}))))
 
@@ -499,6 +514,20 @@
 (deftest accessors-default-on-empty-cfg
   (is (= {} (config/vars {})))
   (is (= {} (config/tasks {}))))
+
+(deftest visible-tasks-drops-private
+  (let [cfg {:tasks {'fmt {:do [{:sh "echo fmt"}]}
+                     'secret {:private? true
+                              :do [{:sh "echo secret"}]}}}]
+    (is (= {'fmt {:do [{:sh "echo fmt"}]}} (config/visible-tasks cfg)))))
+
+(deftest visible-tasks-all-private-is-empty
+  (let [cfg {:tasks {'secret {:private? true
+                              :do [{:sh "echo secret"}]}}}]
+    (is (= {} (config/visible-tasks cfg)))))
+
+(deftest visible-tasks-no-tasks-is-empty
+  (is (= {} (config/visible-tasks {}))))
 
 ;; ---------------------------------------------------------------------------
 ;; load-config: :depends semantic cross-checks (Task 5)

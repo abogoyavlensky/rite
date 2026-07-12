@@ -297,6 +297,13 @@
   (when-not (or (contains? task :do) (contains? task :depends))
     "must define :do or :depends"))
 
+(defn- private-errors
+  "A task's :private? — a boolean. true hides the task from listings and
+   completion; false (or absent) is visible."
+  [v]
+  (when-not (boolean? v)
+    (str "must be true or false, got " (pr-str v))))
+
 (def ^:private task-schema
   [:and
    [:map {:closed true}
@@ -305,7 +312,8 @@
     [:do {:optional true} [:fn do-errors]]
     [:depends {:optional true} depends-schema]
     [:deps {:optional true} deps-schema]
-    [:paths {:optional true} [:vector rel-path-schema]]]
+    [:paths {:optional true} [:vector rel-path-schema]]
+    [:private? {:optional true} [:fn private-errors]]]
    [:fn task-do-or-depends-errors]])
 
 (defn- task-name-errors [k]
@@ -684,6 +692,13 @@
   "Return the :tasks map from a loaded cfg map, or {} if absent."
   [cfg]
   (or (:tasks cfg) {}))
+
+(defn visible-tasks
+  "The :tasks map minus tasks flagged :private? true — the discovery-visible
+   subset shown in help, `rite tasks`, and completion. Private tasks stay
+   runnable and remain valid :depends targets; only listing is affected."
+  [cfg]
+  (into {} (remove (fn [[_ t]] (:private? t)) (tasks cfg))))
 
 (defn vars
   "Return the :vars map from a loaded cfg map, or {} if absent."
