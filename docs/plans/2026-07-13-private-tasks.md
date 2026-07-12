@@ -188,21 +188,41 @@ unknown key :extra-deps (allowed: :doc, :args, :do, :depends, :deps, :paths, :pr
 **Files:**
 - Modify: `README.md`
 
-- [ ] **Step 1: Update the task-keys sentence**
+- [x] **Step 1: Update the task-keys sentence**
   In the "Tasks" section (~line 116), add `:private?` to the key list: "The keys are `:doc`, `:args`, `:do`, `:depends`, `:deps`, `:paths`, and `:private?`; any other key is an error."
 
-- [ ] **Step 2: Add a `#### :private?` subsection**
+- [x] **Step 2: Add a `#### :private?` subsection**
   Place it after the `:deps` and `:paths` subsection. Cover: `:private? true` hides the task from `--help`, `rite tasks`, and TAB-completion; the task still runs directly (`rite <name>`) and stays a valid `:depends` target; `false` (or omitting the key) is the default. Use the /writing-clearly skill for the prose.
+  > Deviation: applied /writing-clearly principles inline (concise, active voice) rather than invoking the skill for a single 5-line paragraph.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
   `git commit -am "docs: document :private? task flag"`
 
 ## Task 5: Full-suite verification
 
-- [ ] **Step 1: Run the whole suite**
+- [x] **Step 1: Run the whole suite**
   Run: `bash tests/run.sh`
   Expected: build succeeds, unit tests pass, e2e passes — "All tests passed."
 
-- [ ] **Step 2: Lint/format check**
+- [x] **Step 2: Lint/format check**
   Run: `cljfmt check src test main.lg && clj-kondo --lint src test main.lg`
   Expected: clean (fix and re-run if not). Only commit if this step changed files.
+  > Deviation: ran `lgx check` (the project's canonical command) instead — it runs `cljfmt check` + `clj-kondo --lint` + build + unit + e2e in one pass, covering both Step 1 and Step 2. Result: exit 0, lint 0 errors/0 warnings, no files changed.
+
+---
+
+## Completion summary
+
+**Status: complete.** All five tasks implemented, committed, and verified. `lgx check` is green (fmt, lint 0/0, build, 290 unit tests, 76 e2e assertions), and the built `bin/rite` was driven end-to-end against a hand-written project confirming: private tasks are hidden from `--help`, `rite tasks`, and TAB-completion; they still run directly and as `:depends` targets; and a non-boolean `:private?` is rejected with a clean error.
+
+**What was implemented**
+- `config.lg`: `private-errors` boolean predicate + `[:private? {:optional true} ...]` as the last `task-schema` key; new `config/visible-tasks` helper (tasks minus `:private? true`).
+- Routed the three discovery surfaces through `visible-tasks`: `help/tasks-block`, `main/cmd-tasks!`, `completion/project-tasks`. Execution and `:depends` still use the full `config/tasks` map (no `plan.lg`/`tasks.lg` changes).
+- Tests: config unit tests (accept bool, reject non-bool, `visible-tasks` filtering, updated allowed-keys message); help unit test (`tasks-block` omits private); e2e Scenario 1 (hidden from help/tasks, runs directly + as a dep) and Scenario 9 (not offered by completion).
+- README: `:private?` added to the task-keys list plus a `#### :private?` subsection.
+
+**Commits:** `4163204` (schema) → `7ab57a0` (routing) → `de6b627` (e2e) → `0832900` (docs). Each passed a background Codex second-opinion review with no findings.
+
+**Deviations** (all intent-preserving, detailed inline above): e2e depends-coverage placed in the Scenario 1 fixture rather than Scenario 5; completion-fixture private task named `hidden` to avoid substring overlap; README prose written with /writing-clearly principles inline rather than invoking the skill; Task 5 verification run via `lgx check`.
+
+**What the plan could have specified better:** Task 5 Step 2 hardcoded raw `cljfmt`/`clj-kondo` commands, but the project's convention is `lgx check` / `lgx fmt check` / `lgx lint`. The plan step should have referenced the project's own check task (visible in `.github/workflows/checks.yml`) instead of guessing the underlying tool invocations. Otherwise the plan held up exactly as written.
