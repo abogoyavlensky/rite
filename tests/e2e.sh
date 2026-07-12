@@ -350,5 +350,61 @@ fi
 rm -rf "$proj" "$home"
 
 # ---------------------------------------------------------------------------
+echo "==> Scenario 9: shell completion (__complete + completion)"
+proj="$(mktemp -d)"; home="$(mktemp -d)"
+cat > "$proj/rite.edn" <<'EOF'
+{:tasks {deploy {:args [{:name :env :type [:enum "prod" "staging"]}]
+                 :do [{:sh "echo {{arg/env}}"}]}
+         build  {:do [{:sh "echo build"}]}}}
+EOF
+
+# Command position: task names + the `tasks` built-in; hidden commands absent.
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" __complete "")"
+assert_contains "$out" "deploy" "completion: lists task deploy"
+assert_contains "$out" "build" "completion: lists task build"
+assert_contains "$out" "tasks" "completion: lists built-in tasks"
+assert_not_contains "$out" "__complete" "completion: hides __complete command"
+
+# Prefix filter at command position.
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" __complete dep)"
+assert_eq "$out" "deploy" "completion: prefix filters to deploy"
+
+# Enum arg values at the task's arg position, and prefix-filtered.
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" __complete deploy "")"
+assert_contains "$out" "prod" "completion: enum value prod"
+assert_contains "$out" "staging" "completion: enum value staging"
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" __complete deploy pr)"
+assert_eq "$out" "prod" "completion: enum prefix filters to prod"
+
+# A task with no enum arg there offers nothing (shell falls back to files).
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" __complete build "")"
+assert_eq "$out" "" "completion: non-enum arg offers nothing"
+
+# __complete never breaks the shell: exits 0 outside any project...
+nop="$(mktemp -d)"
+set +e; out="$(cd "$nop" && RITE_HOME="$home" "$RITE" __complete "" 2>&1)"; rc=$?; set -e
+[[ $rc -eq 0 ]] || fail "completion no-project: expected exit 0 (got $rc)"
+assert_contains "$out" "tasks" "completion no-project: still lists built-in"
+rm -rf "$nop"
+
+# ...and exits 0 with an invalid rite.edn (task names just drop out).
+bad="$(mktemp -d)"; echo '{:tasks {bad {}}}' > "$bad/rite.edn"
+set +e; out="$(cd "$bad" && RITE_HOME="$home" "$RITE" __complete "" 2>&1)"; rc=$?; set -e
+[[ $rc -eq 0 ]] || fail "completion invalid-config: expected exit 0 (got $rc)"
+rm -rf "$bad"
+
+# `completion <shell>` prints a script; unknown shell exits 1.
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" completion bash)"
+assert_contains "$out" "__complete" "completion bash: script mentions __complete"
+assert_contains "$out" "complete -o default" "completion bash: registers completion"
+set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" completion nope 2>&1)"; rc=$?; set -e
+[[ $rc -eq 1 ]] || fail "completion unknown-shell: expected exit 1 (got $rc)"
+
+# The commands stay hidden from help.
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" --help)"
+assert_not_contains "$out" "completion" "completion: hidden from help"
+rm -rf "$proj" "$home"
+
+# ---------------------------------------------------------------------------
 echo
 echo "All e2e scenarios passed ($PASS_COUNT assertions)."
