@@ -307,7 +307,13 @@ binary: `lgx build` (→ `bin/rite`). Full build + unit + e2e: `bash tests/run.s
 **Files:**
 - Modify: `tests/e2e.sh`
 
-- [ ] **Step 1: Add Scenario 10 after Scenario 9**
+> Deviation: adding `install` to `builtin-commands` (Task 3) also changed what
+> **Scenario 9's** invalid-config `__complete ""` returns — now `install\ntasks`,
+> not just `tasks`. Updated that existing `assert_eq` to `$'install\ntasks'`
+> (intent unchanged: no leaked task name survives). The plan's executor notes
+> listed only the unit assertions that would break, not this e2e one.
+
+- [x] **Step 1: Add Scenario 10 after Scenario 9**
   Guard on `command -v git` like Scenario 6 (`skip` otherwise). Reuse
   `make_bare_repo` to seed a `file://` git dep, and the per-scenario
   `mktemp -d` project + `RITE_HOME` pattern. In a fixture `rite.edn` with a task
@@ -330,11 +336,15 @@ binary: `lgx build` (→ `bin/rite`). Full build + unit + e2e: `bash tests/run.s
   - `__complete ""` in the project lists `install` (`assert_contains`).
   Increment happens automatically via `pass`/`PASS_COUNT`.
 
-- [ ] **Step 2: Run the full suite (build + unit + e2e)**
+- [x] **Step 2: Run the full suite (build + unit + e2e)**
   Run: `bash tests/run.sh`
   Expected: all pass (unit + every e2e scenario including the new one).
+  > Result: all tests passed; e2e now 71 assertions (was 62) — Scenario 10 adds
+  > 9 (first-run install, done summary, dep dir present, cached re-run, no
+  > "installing" on re-run, completion offers install, no-deps message,
+  > fetch-failure exit 1, fetch-failure clean error).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
   `git commit -m "test: e2e coverage for rite install (Scenario 10)"`
 
 ### Task 5: Documentation
