@@ -1,6 +1,6 @@
 # Shell Completions Implementation Plan
 
-> **For agentic workers:** Use executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** Use executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** TAB-complete rite's task names and a task's `[:enum ...]` arg values in bash, zsh, and fish, via `rite completion <shell>` and a hidden `rite __complete` endpoint.
 
@@ -223,7 +223,7 @@ assertions, 0 failures). Full build + unit + e2e: `bash tests/run.sh` (or
 - Create: `src/rite/completion.lg`
 - Test: `test/rite/completion_test.lg`
 
-- [ ] **Step 1: Write failing tests for `candidates`**
+- [x] **Step 1: Write failing tests for `candidates`**
   In `test/rite/completion_test.lg` (ns `rite.completion-test`, requiring
   `clojure.test` and `rite.completion`), following the `deftest`/`is` style of
   `test/rite/cli_test.lg`. Cover, using a `tasks` map literal like
@@ -246,22 +246,22 @@ assertions, 0 failures). Full build + unit + e2e: `bash tests/run.sh` (or
   - an unknown typed command: `words ["nope"]`, `cur ""` → `[]`;
   - `cur "-"` and `cur "--"` → `[]` in every position.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
   Run: `lgx test test/rite/completion_test.lg`
   Expected: FAIL (namespace `rite.completion` does not exist yet).
 
-- [ ] **Step 3: Implement `builtin-commands`, `candidates`, and helpers**
+- [x] **Step 3: Implement `builtin-commands`, `candidates`, and helpers**
   Pure code only, no I/O. Implement `prompt-state`, `matches`, `shell-safe?`,
   `enum-values`, and `candidates` per the Design (signatures and the
   `shell-safe-re` regex are fixed above; match them exactly). `builtin-commands`
   is `["tasks"]` with a comment naming `dispatch` in `main.lg` as source of
   truth. Require `[string :as str]`.
 
-- [ ] **Step 4: Run the full unit suite**
+- [x] **Step 4: Run the full unit suite**
   Run: `lgx test`
   Expected: PASS (260 + new assertions, 0 failures).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat: add pure shell-completion candidate logic"`
 
 ### Task 2: Script constants and the `completion` command
@@ -270,17 +270,17 @@ assertions, 0 failures). Full build + unit + e2e: `bash tests/run.sh` (or
 - Modify: `src/rite/completion.lg`, `main.lg`
 - Test: `test/rite/completion_test.lg`
 
-- [ ] **Step 1: Write failing tests for the script constants and shell lookup**
+- [x] **Step 1: Write failing tests for the script constants and shell lookup**
   Each of the three script strings is non-empty, contains `__complete`, and
   registers completion for `rite` (bash: `complete -o default`; zsh:
   `#compdef rite`; fish: `complete -c rite`). `(completion-script "bash")`,
   `"zsh"`, `"fish"` are non-empty; `(completion-script "nope")` is nil.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
   Run: `lgx test test/rite/completion_test.lg`
   Expected: FAIL (constants and `completion-script` missing).
 
-- [ ] **Step 3: Implement the scripts, lookup, and `cmd-completion!`**
+- [x] **Step 3: Implement the scripts, lookup, and `cmd-completion!`**
   Port the three lgx scripts (`../lgx/lgx/completion.lg`) as `^:private` string
   constants, replacing `lgx` → `rite` and `_lgx` → `_rite` throughout (including
   the load-instruction comments and the `funcstack`/function names). Add
@@ -291,18 +291,18 @@ assertions, 0 failures). Full build + unit + e2e: `bash tests/run.sh` (or
   `"completion" (completion/cmd-completion! rest-args)`. Do **not** add a CLI/help
   row — the command stays hidden.
 
-- [ ] **Step 4: Run the full unit suite**
+- [x] **Step 4: Run the full unit suite**
   Run: `lgx test`
   Expected: PASS.
 
-- [ ] **Step 5: Smoke-check the built binary**
+- [x] **Step 5: Smoke-check the built binary**
   Run: `lgx build >/dev/null && ./bin/rite completion bash | head -3`
   → bash script lines. Then `./bin/rite completion nope; echo exit=$?` →
   stderr error and `exit=1`; `./bin/rite completion; echo exit=$?` → the
   "requires a shell argument" error and `exit=1`; `./bin/rite --help | grep -c
   completion` → `0`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
   `git commit -m "feat: add hidden rite completion command with bash/zsh/fish scripts"`
 
 ### Task 3: `__complete` endpoint and e2e coverage
@@ -310,14 +310,14 @@ assertions, 0 failures). Full build + unit + e2e: `bash tests/run.sh` (or
 **Files:**
 - Modify: `src/rite/completion.lg`, `main.lg`, `tests/e2e.sh`
 
-- [ ] **Step 1: Implement `project-tasks`, `complete!`, and the dispatch branch**
+- [x] **Step 1: Implement `project-tasks`, `complete!`, and the dispatch branch**
   In `rite.completion`, add `project-tasks` (non-throwing config read →
   `{task-name-string [args-decls] …}`, own try/catch → `{}`) and `complete!`
   (words/cur split, try/catch around the whole body, no `os/exit` inside), per
   the Design. In `main.lg`, add the `"__complete"` branch to `dispatch`:
   `"__complete" (do (completion/complete! rest-args) (os/exit 0))`.
 
-- [ ] **Step 2: Smoke-check the built binary**
+- [x] **Step 2: Smoke-check the built binary**
   Run: `lgx build >/dev/null`, then from the repo root (rite is itself a rite
   project — `rite.edn` declares `fmt`/`lint`/`check`):
   `./bin/rite __complete ""` → includes `fmt`, `lint`, `check`, `tasks`;
@@ -325,7 +325,7 @@ assertions, 0 failures). Full build + unit + e2e: `bash tests/run.sh` (or
   `./bin/rite __complete fmt ""` → `check` and `fix` (the enum values);
   `./bin/rite __complete lint ""; echo exit=$?` → nothing, `exit=0`.
 
-- [ ] **Step 3: Add Scenario 9 to `tests/e2e.sh`**
+- [x] **Step 3: Add Scenario 9 to `tests/e2e.sh`**
   Following the file's existing helper/assert style (`assert_contains`,
   `assert_not_contains`, `assert_eq`, `fail`, per-scenario `mktemp -d` project
   + `RITE_HOME`). In a fixture `rite.edn` declaring a task with an `[:enum …]`
@@ -346,18 +346,18 @@ assertions, 0 failures). Full build + unit + e2e: `bash tests/run.sh` (or
   Increment the final assertion-count message automatically via `PASS_COUNT`
   (already handled by `pass`).
 
-- [ ] **Step 4: Run the full suite (build + unit + e2e)**
+- [x] **Step 4: Run the full suite (build + unit + e2e)**
   Run: `bash tests/run.sh`
   Expected: all pass (unit + all e2e scenarios including the new one).
 
-- [ ] **Step 5: Interactive bash smoke test**
+- [x] **Step 5: Interactive bash smoke test**
   In a bash shell: `source <(./bin/rite completion bash)`, then confirm
   `rite <TAB>` lists task names + `tasks` and `rite fm<TAB>` completes to `fmt`
   and `rite fmt <TAB>` offers `check`/`fix`. zsh/fish scripts are byte-for-byte
   ports of lgx's interactively tested ones; if those shells are unavailable
   here, note it in the final report.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
   `git commit -m "feat: add __complete endpoint for dynamic shell completion"`
 
 ### Task 4: Documentation
@@ -365,7 +365,7 @@ assertions, 0 failures). Full build + unit + e2e: `bash tests/run.sh` (or
 **Files:**
 - Modify: `README.md`
 
-- [ ] **Step 1: Add a `## Shell completions` section at the bottom of `README.md`**
+- [x] **Step 1: Add a `## Shell completions` section at the bottom of `README.md`**
   A new top-level section after `## Development` (the last current section),
   introduced with one sentence noting completion covers task names and a task's
   enum arg values. One subsection/snippet per shell:
@@ -375,15 +375,15 @@ assertions, 0 failures). Full build + unit + e2e: `bash tests/run.sh` (or
   - fish: `rite completion fish > ~/.config/fish/completions/rite.fish`.
   Use the /writing-clearly skill.
 
-- [ ] **Step 2: Add a CLI row**
+- [x] **Step 2: Add a CLI row**
   In the `## CLI` code block, add a line documenting
   `rite completion <shell>   # print a bash/zsh/fish completion script`.
 
-- [ ] **Step 3: Format check and final run**
+- [x] **Step 3: Format check and final run**
   Run: `lgx fmt check` then `lgx test`
   Expected: both pass.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
   `git commit -m "docs: document shell completions"`
 
 ---
@@ -399,3 +399,45 @@ assertions, 0 failures). Full build + unit + e2e: `bash tests/run.sh` (or
   (project-controlled enum values reach the command line on TAB). Port them
   verbatim from lgx — do not "simplify" the no-`compgen -W` bash loop or the
   regex.
+
+---
+
+## Status: Completed (2026-07-12)
+
+All four tasks implemented and verified.
+
+**What was built:** `rite completion <shell>` prints bash/zsh/fish scripts
+embedded as string constants in `src/rite/completion.lg`; a hidden
+`rite __complete` dispatch branch returns sorted, prefix-filtered candidates —
+the project's task names plus the `tasks` built-in at the command position, and
+a task arg's declared `[:enum ...]` values at that arg's position. Both commands
+are hidden from help and from TAB candidates, and were already reserved as task
+names in `config.lg`. `__complete` swallows all errors and exits 0; outside a
+project or with a broken `rite.edn`, the `tasks` built-in still completes and
+task names drop out. Task names and enum values are both `shell-safe?`-filtered
+so completion never inserts active shell syntax on TAB.
+
+**Verification:** 279 unit tests / 349 assertions pass; full `bash tests/run.sh`
+(build + unit + 62 e2e assertions) green, including the new Scenario 9. The bash
+flow was driven end to end by sourcing `bin/rite completion bash` and exercising
+`_rite_complete` via `COMP_WORDS`/`COMP_CWORD` (command names, prefix filter,
+enum values, and the `rite --help <TAB>` → nothing case). zsh and fish were not
+installed in this environment; their scripts are byte-for-byte ports of lgx's
+interactively tested ones. `lgx fmt check` clean.
+
+**Deviations (all recorded inline):**
+1. Tasks 1 and 2 were implemented and committed together (cohesive small
+   module), and the `__complete` dispatch branch was pulled forward from Task 3.
+2. Two Codex-review-driven changes, both intent-preserving hardening: (a) task
+   names are `shell-safe?`-filtered too, not only enum values; (b) `prompt-state`
+   skips only `--verbose` (mirroring `cli/parse-leading-flags`) instead of every
+   `-`-prefixed token, so completion no longer offers task names after a stray
+   or terminal flag like `rite --help `.
+3. The invalid-config e2e case asserts the exact output (`tasks` only) rather
+   than just exit 0 (Codex advisory).
+
+**What the plan could have specified better:** it inherited lgx's
+"skip every `-`-prefixed token" word-walk, which is wrong for rite's grammar
+(only `--verbose` is a real leading flag) — Codex caught it. A plan that spells
+out the exact leading-flag grammar to mirror, rather than "port from lgx", would
+have avoided the fixup.
