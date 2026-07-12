@@ -21,16 +21,19 @@
 
 (defn- prompt-state
   "Classify the words typed before the cursor against rite's grammar
-   (`rite [--verbose]* <task> [args...]`). Any `-`-prefixed token is skipped so
-   a stray flag is never mistaken for the task. Returns a map whose :state is
-   :command-position (still completing the task name) or :command-typed — the
-   latter with :command (the typed task word) and :args-typed (how many args
-   follow it, i.e. the 0-indexed position of the arg under the cursor)."
+   (`rite [--verbose]* <task> [args...]`). Mirrors cli/parse-leading-flags
+   exactly: only `--verbose` is a leading flag and is skipped (repeatable); the
+   first other token — including a stray flag like `--bogus` or a terminal one
+   like `--help`, which the real parser treats as the command word — ends the
+   command position. Returns a map whose :state is :command-position (still
+   completing the task name) or :command-typed — the latter with :command (the
+   typed command word) and :args-typed (how many args follow it, i.e. the
+   0-indexed position of the arg under the cursor)."
   [words]
   (loop [ws (seq words)]
     (cond
       (nil? ws) {:state :command-position}
-      (str/starts-with? (first ws) "-") (recur (next ws))
+      (= "--verbose" (first ws)) (recur (next ws))
       :else {:state :command-typed
              :command (first ws)
              :args-typed (count (rest ws))})))

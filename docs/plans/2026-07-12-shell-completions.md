@@ -60,11 +60,19 @@ private `prompt-state` classifies `words`:
   (loop [ws (seq words)]
     (cond
       (nil? ws) {:state :command-position}
-      (str/starts-with? (first ws) "-") (recur (next ws))   ; skip --verbose etc.
+      (= "--verbose" (first ws)) (recur (next ws))   ; the only leading flag
       :else {:state :command-typed
              :command (first ws)
              :args-typed (count (rest ws))})))
 ```
+
+`prompt-state` mirrors `cli/parse-leading-flags` exactly: **only** `--verbose`
+is a leading flag (repeatable). Any other token — a stray `--bogus`, a terminal
+`--help`/`-v` — is what the real parser treats as the command word, so it ends
+the command position and completion offers nothing after it (an unknown command
+is not in `tasks` → `[]`). (Per the committed-code Codex review; an earlier
+draft skipped every `-`-prefixed token, which wrongly offered task names after
+`rite --help `.)
 
 `candidates` then:
 

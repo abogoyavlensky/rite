@@ -52,7 +52,18 @@
     (is (not (some #(= "__complete" %) out)))))
 
 (deftest leading-verbose-still-completes-command
-  (is (= ["fmt"] (completion/candidates ["--verbose"] "fm" sample-tasks))))
+  (is (= ["fmt"] (completion/candidates ["--verbose"] "fm" sample-tasks)))
+  ;; --verbose is repeatable, mirroring cli/parse-leading-flags.
+  (is (= ["fmt"] (completion/candidates ["--verbose" "--verbose"] "fm"
+                                        sample-tasks))))
+
+(deftest stray-or-terminal-flag-ends-command-position
+  ;; Only --verbose is a leading flag; the real parser treats any other token
+  ;; (a stray --bogus, a terminal --help/-v) as the command word, so completion
+  ;; must not offer task names in the position after it.
+  (is (= [] (completion/candidates ["--bogus"] "" sample-tasks)))
+  (is (= [] (completion/candidates ["--help"] "" sample-tasks)))
+  (is (= [] (completion/candidates ["-v"] "fm" sample-tasks))))
 
 ;; ---------------------------------------------------------------------------
 ;; candidates — enum arg values at a task's arg position
