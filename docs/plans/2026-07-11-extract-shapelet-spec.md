@@ -2,6 +2,8 @@
 
 > **For agentic workers:** Use executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **STATUS: COMPLETED** — see summary at the end.
+
 **Goal:** Move rite's schema-validation module (`src/rite/spec.lg`) into the standalone `shapelet` library, release shapelet v0.1.0, and make rite consume it as a pinned git dependency.
 
 **Tech Stack:** let-go (`lg` 1.11.1), lgx 0.1.1, cljfmt, clj-kondo, GitHub Actions.
@@ -92,38 +94,43 @@ In rite (this repo):
 - Modify: `../shapelet/src/shapelet/core.lg`
 - Modify: `../shapelet/test/shapelet/core_test.lg`
 
-- [ ] **Step 1: Confirm shapelet is clean**
+- [x] **Step 1: Confirm shapelet is clean**
   Run: `git -C ../shapelet status --short`
   Expected: no output. If there are stray changes, stop and ask.
 
-- [ ] **Step 2: Copy the module**
+- [x] **Step 2: Copy the module**
   Overwrite `../shapelet/src/shapelet/core.lg` with the full contents of
   rite's `src/rite/spec.lg`, changing only the ns form to
   `(ns shapelet.core (:require [string :as str]))`. Keep the header
   comment and everything else byte-identical.
 
-- [ ] **Step 3: Copy the tests**
+- [x] **Step 3: Copy the tests**
   Overwrite `../shapelet/test/shapelet/core_test.lg` with the contents of
   rite's `test/rite/spec_test.lg`, changing the ns to
   `shapelet.core-test` and the require to `[shapelet.core :as spec]`
   (keep the `spec` alias so test bodies are untouched; update the file's
   header comment to say shapelet.core).
 
-- [ ] **Step 4: Run shapelet checks**
+- [x] **Step 4: Run shapelet checks**
   Run: `cd ../shapelet && lgx fmt check && lgx lint && lgx test`
   Expected: fmt clean, lint clean, all tests pass (the suite is the ~40
   spec tests; the greet test is gone). If fmt fails, run `lgx fmt` and
   re-check.
 
-- [ ] **Step 5: Commit in shapelet**
+- [x] **Step 5: Commit in shapelet**
   `git -C ../shapelet add -A && git -C ../shapelet commit -m "feat: add schema validation engine from rite"`
+
+> Deviation: none. Codex review (P2, deferred): malformed composite schemas
+> (`[:vector]`, `[:and]`, 2-element `[:map-of]`) throw only when a value
+> exercises the missing child, not eagerly — pre-existing behavior kept to
+> preserve the verbatim move; noted as a shapelet follow-up.
 
 ### Task 2: Write the shapelet README
 
 **Files:**
 - Modify: `../shapelet/README.md`
 
-- [ ] **Step 1: Write library documentation**
+- [x] **Step 1: Write library documentation**
   Replace the scaffold README. Use /writing-clearly. Cover:
   - One-paragraph pitch: minimal schema-as-data validation for let-go,
     malli in spirit; returns error data, never throws on invalid values.
@@ -141,22 +148,28 @@ In rite (this repo):
   - A short usage example with a realistic schema and a rendered error.
   - Keep the existing Development section (mise, lgx commands).
 
-- [ ] **Step 2: Commit in shapelet**
+- [x] **Step 2: Commit in shapelet**
   `git -C ../shapelet add README.md && git -C ../shapelet commit -m "docs: document schema forms and API"`
 
 ### Task 3: Release shapelet v0.1.0
 
-- [ ] **Step 1: Push and watch checks**
+- [x] **Step 1: Push and watch checks**
   Run: `git -C ../shapelet push`
   Then: `gh run watch --repo abogoyavlensky/shapelet --exit-status`
   (or poll `gh run list --repo abogoyavlensky/shapelet --limit 1`)
   Expected: checks workflow green. Fix and re-push if not.
 
-- [ ] **Step 2: Tag the release**
+- [x] **Step 2: Tag the release**
   Run: `cd ../shapelet && lgx release 0.1.0`
   (the `release` task runs `git tag v0.1.0` and `git push --tags`)
   Expected: tag pushed; the release workflow publishes GitHub release
   v0.1.0. Verify with `gh release view v0.1.0 --repo abogoyavlensky/shapelet`.
+
+> Deviation: no SSH keys in this environment, so instead of `lgx release`
+> (which pushes over SSH) the tag was created and pushed manually over
+> HTTPS (`git tag v0.1.0 && git push https://github.com/... v0.1.0`), as
+> was the branch push in Step 1. Same effect: checks green, release
+> workflow published v0.1.0.
 
 ### Task 4: Switch rite to the shapelet dep
 
@@ -166,35 +179,35 @@ In rite (this repo):
 - Delete: `src/rite/spec.lg`
 - Delete: `test/rite/spec_test.lg`
 
-- [ ] **Step 1: Add the dep (local, for the dev loop)**
+- [x] **Step 1: Add the dep (local, for the dev loop)**
   In `lgx.edn`, set:
   `:deps {abogoyavlensky/shapelet {:local/root "../shapelet"}}`
 
-- [ ] **Step 2: Rewire the require**
+- [x] **Step 2: Rewire the require**
   In `src/rite/config.lg`: change `[rite.spec :as spec]` to
   `[shapelet.core :as spec]`; update the line-39 comment to point at
   shapelet instead of rite.spec.
 
-- [ ] **Step 3: Delete the moved files**
+- [x] **Step 3: Delete the moved files**
   Run: `git rm src/rite/spec.lg test/rite/spec_test.lg`
 
-- [ ] **Step 4: Verify against the local dep**
+- [x] **Step 4: Verify against the local dep**
   Run: `lgx test`
   Expected: all remaining unit tests pass (spec tests are gone;
   config tests still pass via the dep).
 
-- [ ] **Step 5: Flip the coordinate to the released tag**
+- [x] **Step 5: Flip the coordinate to the released tag**
   In `lgx.edn`, replace the coord with:
   `{:git/url "https://github.com/abogoyavlensky/shapelet" :git/tag "v0.1.0"}`
 
-- [ ] **Step 6: Full check against the git dep**
+- [x] **Step 6: Full check against the git dep**
   Run: `lgx fmt check && lgx lint && bash tests/run.sh`
   Expected: fmt clean; lint clean (if clj-kondo flags `shapelet.core`,
   add the minimal exclusion to `.clj-kondo/config.edn` and note it in
   the commit); build + unit + e2e all pass, with the dep fetched into
   the gitlibs cache by lgx.
 
-- [ ] **Step 7: Commit in rite**
+- [x] **Step 7: Commit in rite**
   Check `git status --short` for unrelated changes first, then stage only
   this task's files:
   `git add lgx.edn src/rite/config.lg .clj-kondo/config.edn && git commit -m "refactor: replace rite.spec with shapelet dep"`
@@ -203,7 +216,41 @@ In rite (this repo):
 
 ### Task 5: Wrap up
 
-- [ ] **Step 1: Mark this plan complete**
+- [x] **Step 1: Mark this plan complete**
   Tick all checkboxes in `docs/plans/2026-07-11-extract-shapelet-spec.md`,
   then:
   `git add docs/plans/2026-07-11-extract-shapelet-spec.md && git commit -m "docs: mark shapelet-extraction plan complete"`
+
+---
+
+## Completion Summary
+
+**Implemented.** shapelet is now a real library: `shapelet.core` carries the
+validation engine verbatim from rite (diff-verified, ns-only change) with its
+49 tests and a README documenting the API, error shape, and all schema
+forms. Released as v0.1.0 (shapelet CI green, GitHub release published by
+the release workflow). rite consumes it via
+`abogoyavlensky/shapelet {:git/url ... :git/tag "v0.1.0"}` — its first
+non-empty `:deps` — with `rite.spec` and its tests deleted (−495 lines) and
+`rite.config` requiring `[shapelet.core :as spec]`. Verified end-to-end:
+lgx fetched the tag from GitHub into the gitlibs cache; fmt, lint, 260 unit
+tests, and all e2e scenarios pass; the built binary renders shapelet
+validation errors for a bad rite.edn and runs valid tasks.
+
+**Issues encountered.** None blocking. The anticipated clj-kondo exclusion
+for `shapelet.core` was not needed. Codex's per-task reviews surfaced one
+deferred finding (below) and confirmed the rest clean.
+
+**Deviations (gathered).**
+- Task 1: none in the change itself. Codex P2 deferred: malformed composite
+  schemas (`[:vector]`, `[:and]`, 2-element `[:map-of]`) throw only when a
+  value exercises the missing child, not eagerly — pre-existing engine
+  behavior kept to preserve the verbatim move; follow-up belongs in
+  shapelet.
+- Task 3: no SSH keys in the environment, so the branch and tag were pushed
+  over HTTPS manually instead of via `lgx release` (same effect; release
+  workflow published v0.1.0).
+
+**What the plan could have specified better.** The push/release steps
+assumed SSH access; specifying an HTTPS fallback (or checking auth up
+front) would have avoided the mid-task improvisation. Otherwise it held up.
