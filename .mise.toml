@@ -1,8 +1,8 @@
 # .mise.toml
 [tools]
-lg = "1.11.1"
-lgx = "0.1.1"
-cljfmt = "0.16.4"
+lg = "1.12.2"
+lgx = "0.1.2"
+cljfmt = "0.16.5"
 clj-kondo = "2026.05.25"
 
 [tool_alias]
