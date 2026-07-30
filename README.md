@@ -1,6 +1,6 @@
 # rite
 
-A single-binary task runner for any project. Define tasks in `rite.edn`, then
+A single-binary task runner with an embedded let-go runtime. Define tasks in `rite.edn`, then
 run them with `rite <task>`.
 
 rite is a [let-go](https://github.com/nooga/let-go) program bundled into one

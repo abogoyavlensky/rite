@@ -67,7 +67,7 @@
 ;; Order: synopsis -> Commands -> Tasks (if any) -> Options. `loaded` may be nil
 ;; (no project found); the tasks block is then omitted.
 (defn usage [loaded]
-  (str "rite - task runner for any project\n"
+  (str "rite - task runner with an embedded let-go runtime\n"
        "\n"
        "Usage: rite [options] <task> [args...]\n"
        "\n"

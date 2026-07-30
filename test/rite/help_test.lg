@@ -86,7 +86,7 @@
 
 (deftest usage-has-synopsis-and-sections
   (let [u (help/usage nil)]
-    (is (str/includes? u "rite - task runner for any project"))
+    (is (str/includes? u "rite - task runner with an embedded let-go runtime"))
     (is (str/includes? u "Commands:"))
     (is (str/includes? u "rite <task> [args...]"))
     (is (str/includes? u "rite tasks"))

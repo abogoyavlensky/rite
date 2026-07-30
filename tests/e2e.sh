@@ -86,7 +86,7 @@ EOF
 # ---------------------------------------------------------------------------
 echo "==> Scenario 1: usage / tasks listing / no-project / empty tasks"
 out="$("$RITE" --help)"
-assert_contains "$out" "rite - task runner for any project" "help: synopsis"
+assert_contains "$out" "rite - task runner with an embedded let-go runtime" "help: synopsis"
 assert_contains "$out" "Usage: rite" "help: usage line"
 assert_contains "$out" "rite tasks" "help: lists tasks command"
 
