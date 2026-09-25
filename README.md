@@ -119,8 +119,10 @@ free to use as task names.
 #### `:do` steps
 
 `:do` is one step map or a vector of step maps. Steps run top to bottom. The
-first step to exit non-zero stops the task and becomes its exit code. Output
-streams live, so progress bars and interactive prompts work.
+first step to exit non-zero stops the task and becomes its exit code. rite then
+prints `=> Task <name> failed: step <n> exited with <code>` to stderr, so a quiet
+failure in a long `:depends` chain still says where it stopped. Output streams
+live, so progress bars and interactive prompts work.
 
 Each step has exactly one action key:
 

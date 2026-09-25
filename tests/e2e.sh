@@ -178,6 +178,8 @@ set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" fail 2>/dev/null)"; rc=$?
 pass ":sh fail: propagates exit code 7"
 assert_contains "$out" "before" ":sh fail: first step ran"
 assert_not_contains "$out" "after" ":sh fail: later step skipped"
+set +e; err="$(cd "$proj" && RITE_HOME="$home" "$RITE" fail 2>&1 >/dev/null)"; set -e
+assert_contains "$err" "=> Task fail failed: step 2 exited with 7" ":sh fail: failure line names task and step"
 rm -rf "$proj" "$home"
 
 # ---------------------------------------------------------------------------
@@ -267,6 +269,9 @@ set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" top 2>/dev/null)"; rc=$?;
 pass ":depends failure: propagates dep's exit code 5"
 assert_contains "$out" "boom-ran" ":depends failure: dep step ran"
 assert_not_contains "$out" "top-ran" ":depends failure: dependent skipped"
+set +e; err="$(cd "$proj" && RITE_HOME="$home" "$RITE" top 2>&1 >/dev/null)"; set -e
+assert_contains "$err" "=> Task boom failed: step 2 exited with 5" ":depends failure: failure line names the failing dep"
+assert_not_contains "$err" "Task top failed" ":depends failure: no failure line for the skipped dependent"
 rm -rf "$proj" "$home"
 
 proj="$(mktemp -d)"; home="$(mktemp -d)"

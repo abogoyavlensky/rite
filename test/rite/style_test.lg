@@ -77,6 +77,18 @@
                    (style/task-header "t")))))
 
 ;; ---------------------------------------------------------------------------
+;; failure-line
+;; ---------------------------------------------------------------------------
+
+(deftest failure-line-format
+  (plain #(is (= "=> Task fail failed: step 2 exited with 1"
+                 (style/failure-line "fail" 2 1)))))
+
+(deftest failure-line-is-purple-when-color-enabled
+  (colored #(is (= (str esc "[38;5;98m=> Task t failed: step 1 exited with 7" esc "[0m")
+                   (style/failure-line "t" 1 7)))))
+
+;; ---------------------------------------------------------------------------
 ;; color-enabled? (pure: injected getenv + tty predicate)
 ;; ---------------------------------------------------------------------------
 

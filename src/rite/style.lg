@@ -76,3 +76,11 @@
    leading blank line to separate each step from the previous step's output."
   [cmd]
   (str (purple "$") " " cmd))
+
+(defn failure-line
+  "Purple `=> Task <name> failed: step <n> exited with <code>` line, printed
+   when a task's step exits non-zero. `step-number` is 1-based, matching the
+   order of the `$` lines above it. Callers add the leading blank line."
+  [name step-number exit]
+  (purple (str "=> Task " name " failed: step " step-number " exited with "
+               exit)))

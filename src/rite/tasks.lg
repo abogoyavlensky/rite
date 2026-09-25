@@ -9,8 +9,9 @@
 ;;
 ;; run-plan! runs each entry of a plan/build-plan result in order. Each entry
 ;; is {:name :task :bindings}: its :do steps run sequentially, and the first
-;; non-zero exit stops the whole run with that code. A :depends-only task (no
-;; :do) prints its header and runs nothing.
+;; non-zero exit stops the whole run with that code, after a failure line
+;; naming the task and the 1-based step. A :depends-only task (no :do) prints
+;; its header and runs nothing.
 ;;
 ;; Unlike lgx (which buffers via os/sh and replays), rite streams: :sh steps
 ;; run as (os/exec* "sh" "-c" cmd) and :run steps re-exec rite itself, both
@@ -66,7 +67,8 @@
 
 (defn- run-entry!
   "Run one plan entry's :do steps in order. Returns the first non-zero step
-   exit, or 0. The :run basis is resolved lazily — once, on the first :run step
+   exit, or 0; a non-zero exit first writes a failure line naming the task and
+   the 1-based step to *err*. The :run basis is resolved lazily — once, on the first :run step
    actually reached — so an earlier failing :sh step never triggers a dep
    fetch, and multiple :run steps share one resolution."
   [entry project verbose?]
@@ -75,6 +77,7 @@
         bindings (:bindings entry)]
     (write! *err* (str (style/task-header name) "\n"))
     (loop [steps (or (:do task) [])
+           i 1
            sp-value :unresolved]
       (if (empty? steps)
         0
@@ -84,8 +87,9 @@
                    sp-value)
               exit (run-step! step bindings sp verbose?)]
           (if (zero? exit)
-            (recur (rest steps) sp)
-            exit))))))
+            (recur (rest steps) (inc i) sp)
+            (do (write! *err* (str "\n" (style/failure-line name i exit) "\n"))
+                exit)))))))
 
 (defn run-plan!
   "Run each entry of `plan` (a plan/build-plan :plan vector) in order. The
