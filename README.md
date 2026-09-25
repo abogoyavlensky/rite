@@ -275,9 +275,9 @@ notify {:paths ["scripts"]
 (cli/send (str "deploying to " (first *command-line-args*)))
 ```
 
-Steps run from the directory where you invoked rite, unless the task sets
-`:cwd`, so `:sh` commands and `:run` script paths resolve against your working
-directory, while `:deps` and `:paths` resolve against the project root.
+Steps run from the directory where you invoked rite, or from the task's `:cwd`
+when it sets one, and `:sh` commands and `:run` script paths resolve against
+that directory. `:deps` and `:paths` always resolve against the project root.
 
 **Limitation:** a bundled binary serves `io/resource` only from the archive
 embedded at build time, so rite has no `:resource-paths` and `io/resource` is
