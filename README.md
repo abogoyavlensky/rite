@@ -276,7 +276,8 @@ rite completion <shell>  # print a bash/zsh/fish completion script
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `RITE_HOME` | `$XDG_CACHE_HOME/rite`, else `~/.cache/rite` | State root for the dependency cache. The layout matches lgx's, so set `RITE_HOME=~/.lgx` to reuse lgx's cache. A relative `XDG_CACHE_HOME` is ignored, per the XDG spec. |
-| `RITE_NO_COLOR` | unset | Set to any non-empty value to disable colored headers and step markers. |
+| `RITE_NO_COLOR` | unset | Set to any non-empty value to disable colored headers and step markers. Color is also off when stderr is not a terminal, so piped and CI output stays plain. |
+| `NO_COLOR` | unset | The standard [opt-out](https://no-color.org); same effect as `RITE_NO_COLOR`. |
 
 ## Development
 

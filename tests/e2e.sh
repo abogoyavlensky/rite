@@ -343,21 +343,36 @@ assert_contains "$out" "conflicts with built-in command" "config: reserved task 
 rm -rf "$proj" "$home"
 
 # ---------------------------------------------------------------------------
-echo "==> Scenario 8: RITE_NO_COLOR disables escape codes"
+echo "==> Scenario 8: color is off when piped / NO_COLOR / RITE_NO_COLOR, on under a pty"
 proj="$(mktemp -d)"; home="$(mktemp -d)"
 cat > "$proj/rite.edn" <<'EOF'
 {:tasks {hi {:do [{:sh "echo hi"}]}}}
 EOF
-out="$(cd "$proj" && RITE_NO_COLOR=1 RITE_HOME="$home" "$RITE" hi 2>&1)"
+out="$(cd "$proj" && RITE_NO_COLOR=1 NO_COLOR= RITE_HOME="$home" "$RITE" hi 2>&1)"
 if has_esc "$out"; then fail "RITE_NO_COLOR: output still had escape codes"; fi
 pass "RITE_NO_COLOR: no escape codes in output"
-# Clear RITE_NO_COLOR explicitly so a caller that already exported it doesn't
-# turn this default-color assertion into a spurious failure.
-out_c="$(cd "$proj" && RITE_NO_COLOR= RITE_HOME="$home" "$RITE" hi 2>&1)"
-if has_esc "$out_c"; then
-    pass "default: colored headers contain escape codes"
+out="$(cd "$proj" && RITE_NO_COLOR= NO_COLOR=1 RITE_HOME="$home" "$RITE" hi 2>&1)"
+if has_esc "$out"; then fail "NO_COLOR: output still had escape codes"; fi
+pass "NO_COLOR: no escape codes in output"
+# Both opt-outs blank, but stderr is captured (not a terminal): still plain.
+out="$(cd "$proj" && RITE_NO_COLOR= NO_COLOR= RITE_HOME="$home" "$RITE" hi 2>&1)"
+if has_esc "$out"; then fail "piped: expected plain output but found escape codes"; fi
+pass "piped: no escape codes when stderr is not a terminal"
+# Under a pseudo-terminal (util-linux `script`), color is on by default and
+# NO_COLOR still turns it off.
+if script --version 2>/dev/null | grep -q util-linux; then
+    out_pty="$(script -qec "cd '$proj' && RITE_NO_COLOR= NO_COLOR= RITE_HOME='$home' '$RITE' hi" /dev/null)"
+    if has_esc "$out_pty"; then
+        pass "pty: colored headers contain escape codes"
+    else
+        echo "---- output ----" >&2; echo "$out_pty" >&2
+        fail "pty: expected colored output but found none"
+    fi
+    out_pty="$(script -qec "cd '$proj' && RITE_NO_COLOR= NO_COLOR=1 RITE_HOME='$home' '$RITE' hi" /dev/null)"
+    if has_esc "$out_pty"; then fail "pty + NO_COLOR: output still had escape codes"; fi
+    pass "pty + NO_COLOR: no escape codes"
 else
-    fail "default: expected colored output but found none"
+    skip "pty color checks require util-linux script"
 fi
 rm -rf "$proj" "$home"
 

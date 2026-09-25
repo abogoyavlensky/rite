@@ -1,7 +1,8 @@
 # Colored status output is emitted when stderr is not a terminal
 
-**Status: planned**
+**Status: done**
 Plan: docs/plans/2026-09-25-2226-backlog-sweep.md
+Landed in: `src/rite/style.lg` (tty and `NO_COLOR` checks in `color-enabled?`), Part B of the plan above.
 
 ## Problem
 
