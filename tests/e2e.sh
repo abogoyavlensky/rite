@@ -505,5 +505,59 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+echo "==> Scenario 11: task :env and :cwd"
+proj="$(mktemp -d)"; home="$(mktemp -d)"
+mkdir -p "$proj/sub dir" "$proj/other"
+cat > "$proj/sub dir/show.lg" <<'EOF'
+(println "show.lg found:" (file-exists? "show.lg"))
+EOF
+cat > "$proj/rite.edn" <<'EOF'
+{:vars {:level "debug"}
+ :tasks {envt  {:args [{:name :who}]
+                :env {"GREETING" "hi {{arg/who}}" "LEVEL" "{{var/level}}" "NUM" 3}
+                :do [{:sh "echo $GREETING/$LEVEL/$NUM"}]}
+         after {:depends [[envt "x"]] :do [{:sh "echo after=[$GREETING]"}]}
+         cwdt  {:cwd "sub dir"
+                :do [{:sh "basename \"$PWD\""} {:run ["show.lg"]}]}
+         multi {:cwd "sub dir" :do [{:sh "echo a; echo b"}]}
+         nodir {:cwd "missing" :do [{:sh "echo first; echo second"}]}}}
+EOF
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" envt bob 2>/dev/null)"
+assert_eq "$out" "hi bob/debug/3" ":env: set for the step, templates expanded, number stringified"
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" after 2>/dev/null)"
+assert_eq "$out" "hi x/debug/3
+after=[]" ":env: restored before the next plan entry"
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" cwdt 2>/dev/null)"
+assert_eq "$out" "sub dir
+show.lg found: true" ":cwd: :sh and :run steps run from :cwd"
+out="$(cd "$proj/other" && RITE_HOME="$home" "$RITE" cwdt 2>/dev/null)"
+assert_eq "$out" "sub dir
+show.lg found: true" ":cwd: resolved against the project root, not the invocation dir"
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" multi 2>/dev/null)"
+assert_eq "$out" "a
+b" ":cwd: compound :sh command keeps its syntax"
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" --verbose envt bob 2>&1)"
+assert_contains "$out" "+ env GREETING=hi bob LEVEL=debug NUM=3" ":env: --verbose prints the resolved env"
+set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" nodir 2>/dev/null)"; rc=$?; set -e
+[[ $rc -ne 0 ]] || fail ":cwd missing: expected non-zero exit"
+pass ":cwd missing: non-zero exit"
+assert_eq "$out" "" ":cwd missing: no part of a ;-separated command runs"
+set +e; err="$(cd "$proj" && RITE_HOME="$home" "$RITE" nodir 2>&1 >/dev/null)"; set -e
+assert_contains "$err" "=> Task nodir failed: step 1" ":cwd missing: failure line names the step"
+# :run through a relative executable path: the exe must still resolve after cd.
+ln -s "$RITE" "$proj/rite-bin"
+out="$(cd "$proj" && RITE_HOME="$home" ./rite-bin cwdt 2>/dev/null)"
+assert_eq "$out" "sub dir
+show.lg found: true" ":cwd: :run works when rite is invoked by a relative path"
+# rite-managed variables are rejected at load.
+cat > "$proj/rite.edn" <<'EOF'
+{:tasks {bad {:env {"RITE_SCRIPT" "1"} :do [{:sh "echo hi"}]}}}
+EOF
+set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" bad 2>&1)"; rc=$?; set -e
+[[ $rc -eq 1 ]] || fail ":env managed key: expected exit 1 (got $rc)"
+assert_contains "$out" "is managed by rite and cannot be set" ":env managed key: load error"
+rm -rf "$proj" "$home"
+
+# ---------------------------------------------------------------------------
 echo
 echo "All e2e scenarios passed ($PASS_COUNT assertions)."

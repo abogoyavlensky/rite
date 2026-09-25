@@ -1,5 +1,6 @@
 (ns rite.tasks
   (:require [rite.args :as args]
+            [rite.path :as path]
             [rite.script :as script]
             [rite.style :as style]
             [string :as str]))
@@ -23,6 +24,11 @@
 ;;   - {{arg/<name>}} / {{var/<name>}} tokens in any string, spliced raw;
 ;;     any other {{...}} content passes through. A :run string is expanded
 ;;     then whitespace-split.
+;;
+;; A task's :env is set around its own steps and restored afterwards; its :cwd
+;; wraps each step in `sh` with a cd (rite's own directory never changes, and
+;; let-go's chdir is Linux-only). Neither reaches the task's :depends entries,
+;; which are separate plan entries with their own :env/:cwd.
 ;; --------------------------------------------------------------------------
 
 (defn- as-string [value]
@@ -67,49 +73,85 @@
        (str/join " " (map (fn [k] (str k "=" (get env k))) (sort (keys env))))
        "\n"))
 
-(defn- run-sh-step! [value bindings verbose?]
-  (let [cmd (sh-command value bindings)]
+(defn- run-sh-step! [value bindings cwd verbose?]
+  (let [cmd (cond-> (sh-command value bindings)
+              cwd (with-cwd cwd))]
     (write! *err* (str "\n" (style/step-line cmd) "\n"))
     (when verbose?
       (write! *err* (str "+ sh -c " cmd "\n")))
     (os/exec* "sh" "-c" cmd)))
 
-(defn- run-run-step! [value bindings sp-value verbose?]
+(defn- run-run-step! [value bindings sp-value cwd verbose?]
   (let [argv (run-argv value bindings)]
     (write! *err* (str "\n" (style/step-line (str/join " " argv)) "\n"))
-    (script/exec-script! sp-value argv verbose?)))
+    (script/exec-script! sp-value argv verbose? cwd)))
 
-(defn- run-step! [step bindings sp-value verbose?]
+(defn- run-step! [step bindings sp-value cwd verbose?]
   (cond
-    (contains? step :sh) (run-sh-step! (:sh step) bindings verbose?)
-    (contains? step :run) (run-run-step! (:run step) bindings sp-value verbose?)
+    (contains? step :sh) (run-sh-step! (:sh step) bindings cwd verbose?)
+    (contains? step :run)
+    (run-run-step! (:run step) bindings sp-value cwd verbose?)
     :else (throw (ex-info "step has no action key" {:step step}))))
 
+(defn- set-env!
+  "os/setenv every pair of `env`. Returns the previous values, {name value},
+   for restore-env!."
+  [env]
+  (let [prev (into {} (map (fn [k] [k (os/getenv k)]) (keys env)))]
+    (doseq [[k v] env]
+      (os/setenv k v))
+    prev))
+
+(defn- restore-env!
+  "Put back the values set-env! returned. let-go has no unsetenv, so a var
+   that was absent comes back as \"\" (os/getenv returns \"\" for both)."
+  [prev]
+  (doseq [[k v] prev]
+    (os/setenv k (or v ""))))
+
+(defn- run-steps!
+  "Run `task`'s :do steps in order. Returns the first non-zero step exit, or
+   0; a non-zero exit first writes a failure line naming the task and the
+   1-based step to *err*. The :run basis is resolved lazily — once, on the
+   first :run step actually reached — so an earlier failing :sh step never
+   triggers a dep fetch, and multiple :run steps share one resolution."
+  [name task bindings project cwd verbose?]
+  (loop [steps (or (:do task) [])
+         i 1
+         sp-value :unresolved]
+    (if (empty? steps)
+      0
+      (let [step (first steps)
+            sp (if (and (contains? step :run) (= sp-value :unresolved))
+                 (script/resolve-basis! project task)
+                 sp-value)
+            exit (run-step! step bindings sp cwd verbose?)]
+        (if (zero? exit)
+          (recur (rest steps) (inc i) sp)
+          (do (write! *err* (str "\n" (style/failure-line name i exit) "\n"))
+              exit))))))
+
 (defn- run-entry!
-  "Run one plan entry's :do steps in order. Returns the first non-zero step
-   exit, or 0; a non-zero exit first writes a failure line naming the task and
-   the 1-based step to *err*. The :run basis is resolved lazily — once, on the first :run step
-   actually reached — so an earlier failing :sh step never triggers a dep
-   fetch, and multiple :run steps share one resolution."
+  "Run one plan entry: print its header, set its :env, run its steps from its
+   :cwd (absolutized against `project`), then restore the env whether the
+   steps passed or failed. Returns the first non-zero step exit, or 0."
   [entry project verbose?]
   (let [name (:name entry)
         task (:task entry)
-        bindings (:bindings entry)]
+        bindings (:bindings entry)
+        cwd (when-let [c (:cwd task)] (path/join project c))
+        env (task-env (:env task) bindings)]
     (write! *err* (str (style/task-header name) "\n"))
-    (loop [steps (or (:do task) [])
-           i 1
-           sp-value :unresolved]
-      (if (empty? steps)
-        0
-        (let [step (first steps)
-              sp (if (and (contains? step :run) (= sp-value :unresolved))
-                   (script/resolve-basis! project task)
-                   sp-value)
-              exit (run-step! step bindings sp verbose?)]
-          (if (zero? exit)
-            (recur (rest steps) (inc i) sp)
-            (do (write! *err* (str "\n" (style/failure-line name i exit) "\n"))
-                exit)))))))
+    (when (and verbose? (seq env))
+      (write! *err* (env-trace-line env)))
+    (let [prev (set-env! env)
+          exit (try
+                 (run-steps! name task bindings project cwd verbose?)
+                 (catch e
+                        (do (restore-env! prev)
+                            (throw e))))]
+      (restore-env! prev)
+      exit)))
 
 (defn run-plan!
   "Run each entry of `plan` (a plan/build-plan :plan vector) in order. The

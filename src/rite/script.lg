@@ -162,19 +162,23 @@
    RITE_SCRIPT / LG_SOURCE_PATHS / LG_READ_CLJ, re-exec `(first os/args)` with
    `argv` (streaming stdio), then restore the three env vars so a later :sh
    step doesn't inherit them. Returns the child's exit code. `argv` is the
-   child-argv (argv[0] = the script)."
-  [sp-value argv verbose?]
+   child-argv (argv[0] = the script). When `cwd` is non-nil the child runs
+   from that directory via cwd-argv; rite's own directory is unchanged."
+  [sp-value argv verbose? cwd]
   (let [exe (first os/args)
+        full (if cwd
+               (cwd-argv cwd (absolute-exe exe (os/cwd)) argv)
+               (vec (cons exe argv)))
         prev-script (os/getenv "RITE_SCRIPT")
         prev-sp (os/getenv "LG_SOURCE_PATHS")
         prev-clj (os/getenv "LG_READ_CLJ")]
     (when verbose?
       (write! *err* (env-trace-line sp-value))
-      (write! *err* (exec-trace-line exe argv)))
+      (write! *err* (exec-trace-line (first full) (rest full))))
     (os/setenv "RITE_SCRIPT" "1")
     (os/setenv "LG_SOURCE_PATHS" sp-value)
     (os/setenv "LG_READ_CLJ" "1")
-    (let [exit (apply os/exec* exe argv)]
+    (let [exit (apply os/exec* full)]
       (os/setenv "RITE_SCRIPT" (or prev-script ""))
       ;; let-go has no unsetenv, and lg treats LG_SOURCE_PATHS="" as "search
       ;; nothing" (not "unset") — restoring blank would disable the default `.`
