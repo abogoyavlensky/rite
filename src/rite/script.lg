@@ -94,6 +94,24 @@
   [exe argv]
   (str "+ " exe " " (str/join " " argv) "\n"))
 
+(defn cwd-argv
+  "The argv that runs `exe argv...` from directory `cwd` without changing
+   rite's own working directory: `sh -c` gets the cwd as $1, `shift` drops it,
+   and `exec` replaces the shell so the child's exit code and signals pass
+   straight through."
+  [cwd exe argv]
+  (vec (concat ["sh" "-c" "cd \"$1\" && shift && exec \"$@\"" "sh" cwd exe]
+               argv)))
+
+(defn absolute-exe
+  "`exe` made absolute against `cwd` when it is a relative path containing a
+   `/` (./bin/rite in development), so it still resolves after a cd. An
+   absolute path or a bare name (found via PATH) is returned unchanged."
+  [exe cwd]
+  (if (and (str/includes? exe "/") (not (path/absolute? exe)))
+    (path/join cwd exe)
+    exe))
+
 ;; ---------------------------------------------------------------------------
 ;; Child side: run in-process when RITE_SCRIPT is set
 ;; ---------------------------------------------------------------------------

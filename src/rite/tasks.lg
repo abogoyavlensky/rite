@@ -47,6 +47,26 @@
   [value bindings]
   (script/child-argv (substituted value bindings false)))
 
+(defn with-cwd
+  "Prefix a :sh command so it runs from directory `cwd`. `;` rather than
+   `&&`: a failed cd exits sh with cd's status before any of `cmd` runs, and
+   cmd's own `;`/`&&`/`|` structure is left untouched."
+  [cmd cwd]
+  (str "cd " (args/shell-quote cwd) " || exit; " cmd))
+
+(defn task-env
+  "A task's :env map with every value's {{arg/*}}/{{var/*}} tokens expanded
+   against `bindings`. {} when the task has no :env."
+  [env bindings]
+  (into {} (map (fn [[k v]] [k (args/expand v bindings)]) (or env {}))))
+
+(defn env-trace-line
+  "The verbose `+ env K=V ...` line for a task's expanded :env, keys sorted."
+  [env]
+  (str "+ env "
+       (str/join " " (map (fn [k] (str k "=" (get env k))) (sort (keys env))))
+       "\n"))
+
 (defn- run-sh-step! [value bindings verbose?]
   (let [cmd (sh-command value bindings)]
     (write! *err* (str "\n" (style/step-line cmd) "\n"))

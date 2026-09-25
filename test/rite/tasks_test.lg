@@ -51,3 +51,31 @@
 (deftest run-argv-drops-first-separator
   (is (= ["s.lg" "prod"]
          (tasks/run-argv ["s.lg" "--" :arg/env] {:arg/env "prod"}))))
+
+;; ---------------------------------------------------------------------------
+;; :cwd / :env helpers
+;; ---------------------------------------------------------------------------
+
+(deftest with-cwd-prefixes-cd
+  (is (= "cd '/p/sub dir' || exit; npm test"
+         (tasks/with-cwd "npm test" "/p/sub dir"))))
+
+(deftest with-cwd-quotes-single-quotes
+  (is (= "cd '/p/it'\\''s' || exit; ls"
+         (tasks/with-cwd "ls" "/p/it's"))))
+
+(deftest task-env-expands-values
+  (is (= {"G" "hi x"
+          "L" "debug"}
+         (tasks/task-env {"G" "hi {{arg/who}}"
+                          "L" "{{var/level}}"}
+                         {:arg/who "x"
+                          :var/level "debug"}))))
+
+(deftest task-env-nil-is-empty
+  (is (= {} (tasks/task-env nil {}))))
+
+(deftest env-trace-line-sorted
+  (is (= "+ env A=1 B=2\n"
+         (tasks/env-trace-line {"B" "2"
+                                "A" "1"}))))

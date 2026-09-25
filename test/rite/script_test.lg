@@ -79,3 +79,21 @@
 (deftest exec-trace-line-shows-exe-and-argv
   (is (= "+ /usr/bin/rite s.lg prod\n"
          (script/exec-trace-line "/usr/bin/rite" ["s.lg" "prod"]))))
+
+;; ---------------------------------------------------------------------------
+;; :cwd for :run steps
+;; ---------------------------------------------------------------------------
+
+(deftest cwd-argv-wraps-in-sh
+  (is (= ["sh" "-c" "cd \"$1\" && shift && exec \"$@\"" "sh" "/p/sub dir"
+          "/bin/rite" "s.lg" "a"]
+         (script/cwd-argv "/p/sub dir" "/bin/rite" ["s.lg" "a"]))))
+
+(deftest absolute-exe-joins-relative-path
+  (is (= "/p/./bin/rite" (script/absolute-exe "./bin/rite" "/p"))))
+
+(deftest absolute-exe-keeps-absolute-path
+  (is (= "/usr/bin/rite" (script/absolute-exe "/usr/bin/rite" "/p"))))
+
+(deftest absolute-exe-keeps-bare-name
+  (is (= "rite" (script/absolute-exe "rite" "/p"))))
