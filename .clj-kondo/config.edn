@@ -18,7 +18,7 @@
              mkdir delete-file file-exists? write! *compiling-aot*
              set-read-clj!]}
   ;; let-go builtin namespaces, available without require
-  :unresolved-namespace {:exclude [os io]}
+  :unresolved-namespace {:exclude [os io term]}
   ;; Vars referenced only inside catch bodies, which kondo skips (syntax off).
   :unused-private-var
   {:exclude [rite.config/first-line]}}

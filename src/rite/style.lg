@@ -9,14 +9,33 @@
 ;; (stdout is reserved for the program's real output). These fns are pure so
 ;; they stay testable.
 ;;
-;; let-go has no TTY detection, so color cannot be auto-disabled when piped.
-;; The only gate is RITE_NO_COLOR (named with the project's RITE_ prefix): color
-;; is disabled when the var is present and non-empty. os/getenv returns "" for
-;; an unset var, so a blank value means color is enabled.
+;; Color is on only when all three hold:
+;;   - RITE_NO_COLOR is blank (the project-specific opt-out),
+;;   - NO_COLOR is blank (the de facto standard, https://no-color.org),
+;;   - stderr is a terminal (term/tty? on *err*, since every status line goes
+;;     there), so piped, redirected, and CI output stays free of escape codes.
+;; os/getenv returns "" for an unset var, so a blank value means "not set".
 ;; --------------------------------------------------------------------------
 
-(defn- color-enabled? []
-  (str/blank? (os/getenv "RITE_NO_COLOR")))
+(def ^:dynamic *stderr-tty?*
+  "Zero-arg fn: is *err* a terminal? term/tty? is absent on let-go's js, plan9,
+   and wasip1 builds, so any error counts as \"not a tty\". Dynamic so tests
+   can bind it instead of depending on a real terminal."
+  (fn []
+    (try
+      (boolean (term/tty? *err*))
+      (catch e false))))
+
+(defn color-enabled?
+  "True when color output is on. `getenv` maps a var name to its value (pass
+   os/getenv, or a fn in tests); `tty?` is a zero-arg fn reporting whether
+   stderr is a terminal. A tty? that throws counts as not a terminal."
+  [getenv tty?]
+  (and (str/blank? (getenv "RITE_NO_COLOR"))
+       (str/blank? (getenv "NO_COLOR"))
+       (try
+         (boolean (tty?))
+         (catch e false))))
 
 (def ^:private green-code 35)   ; emerald — built-in command output
 (def ^:private purple-code 98)  ; medium violet — project task output
@@ -27,17 +46,17 @@
 ;; reads calmer for everyday use. Cube colors (not the 0-15 theme palette) so the
 ;; shade stays stable regardless of the user's color scheme.
 (defn- colorize [code s]
-  (if (color-enabled?)
+  (if (color-enabled? os/getenv *stderr-tty?*)
     (str "[38;5;" code "m" s "[0m")
     s))
 
 (defn green
-  "Wrap s in green (built-in command color), unless RITE_NO_COLOR disables it."
+  "Wrap s in green (built-in command color), unless color is disabled."
   [s]
   (colorize green-code s))
 
 (defn purple
-  "Wrap s in purple (custom task color), unless RITE_NO_COLOR disables it."
+  "Wrap s in purple (custom task color), unless color is disabled."
   [s]
   (colorize purple-code s))
 

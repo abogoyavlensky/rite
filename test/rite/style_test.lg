@@ -7,60 +7,97 @@
 
 (def esc "")
 
-;; Each color-dependent test sets RITE_NO_COLOR explicitly and restores it to ""
-;; afterward, so test ordering cannot leak the env between cases. os/getenv
-;; returns "" for an unset var, so "" is the "color enabled" state.
+;; `lgx test` captures stderr, so the real tty check is false here and color
+;; is off by default. Tests pin the tty predicate with `binding`:
+;;   - `plain` for assertions on uncolored shapes (no env needed),
+;;   - `colored` for escape-code assertions, which also blank RITE_NO_COLOR and
+;;     NO_COLOR so a caller's exported value can't turn color off.
+;; Tests that set an env var restore it to "" (os/getenv returns "" when unset).
+
+(defn- plain [f]
+  (binding [style/*stderr-tty?* (constantly false)]
+    (f)))
+
+(defn- colored [f]
+  (os/setenv "RITE_NO_COLOR" "")
+  (os/setenv "NO_COLOR" "")
+  (binding [style/*stderr-tty?* (constantly true)]
+    (f)))
 
 ;; ---------------------------------------------------------------------------
 ;; green / purple (color enabled)
 ;; ---------------------------------------------------------------------------
 
 (deftest green-wraps-code-35
-  (os/setenv "RITE_NO_COLOR" "")
-  (is (= (str esc "[38;5;35mhello" esc "[0m") (style/green "hello"))))
+  (colored #(is (= (str esc "[38;5;35mhello" esc "[0m") (style/green "hello")))))
 
 (deftest purple-wraps-code-98
-  (os/setenv "RITE_NO_COLOR" "")
-  (is (= (str esc "[38;5;98mhello" esc "[0m") (style/purple "hello"))))
+  (colored #(is (= (str esc "[38;5;98mhello" esc "[0m") (style/purple "hello")))))
 
 ;; ---------------------------------------------------------------------------
-;; RITE_NO_COLOR disables color
+;; color disabled: not a tty, RITE_NO_COLOR, NO_COLOR
 ;; ---------------------------------------------------------------------------
 
-(deftest green-plain-when-no-color
-  (os/setenv "RITE_NO_COLOR" "1")
-  (is (= "hello" (style/green "hello")))
-  (os/setenv "RITE_NO_COLOR" ""))
+(deftest green-plain-when-not-a-tty
+  (plain #(is (= "hello" (style/green "hello")))))
 
-(deftest purple-plain-when-no-color
-  (os/setenv "RITE_NO_COLOR" "1")
-  (is (= "hello" (style/purple "hello")))
-  (os/setenv "RITE_NO_COLOR" ""))
+(deftest purple-plain-when-not-a-tty
+  (plain #(is (= "hello" (style/purple "hello")))))
+
+(deftest green-plain-when-rite-no-color-even-on-tty
+  (colored (fn []
+             (os/setenv "RITE_NO_COLOR" "1")
+             (is (= "hello" (style/green "hello")))
+             (os/setenv "RITE_NO_COLOR" ""))))
+
+(deftest purple-plain-when-no-color-even-on-tty
+  (colored (fn []
+             (os/setenv "NO_COLOR" "1")
+             (is (= "hello" (style/purple "hello")))
+             (os/setenv "NO_COLOR" ""))))
 
 ;; ---------------------------------------------------------------------------
-;; header builders (assert plain shapes under RITE_NO_COLOR)
+;; header builders (plain shapes)
 ;; ---------------------------------------------------------------------------
 
 (deftest header-prefixes-arrow
-  (os/setenv "RITE_NO_COLOR" "1")
-  (is (= "=> Building bin/app..." (style/header "Building bin/app...")))
-  (os/setenv "RITE_NO_COLOR" ""))
+  (plain #(is (= "=> Building bin/app..." (style/header "Building bin/app...")))))
 
 (deftest task-header-format
-  (os/setenv "RITE_NO_COLOR" "1")
-  (is (= "=> Running task ci..." (style/task-header "ci")))
-  (os/setenv "RITE_NO_COLOR" ""))
+  (plain #(is (= "=> Running task ci..." (style/task-header "ci")))))
 
 (deftest step-line-prefixes-dollar
-  (os/setenv "RITE_NO_COLOR" "1")
-  (is (= "$ echo hi" (style/step-line "echo hi")))
-  (os/setenv "RITE_NO_COLOR" ""))
+  (plain #(is (= "$ echo hi" (style/step-line "echo hi")))))
 
 (deftest header-is-green-when-color-enabled
-  (os/setenv "RITE_NO_COLOR" "")
-  (is (= (str esc "[38;5;35m=> hi" esc "[0m") (style/header "hi"))))
+  (colored #(is (= (str esc "[38;5;35m=> hi" esc "[0m") (style/header "hi")))))
 
 (deftest task-header-is-purple-when-color-enabled
-  (os/setenv "RITE_NO_COLOR" "")
-  (is (= (str esc "[38;5;98m=> Running task t..." esc "[0m")
-         (style/task-header "t"))))
+  (colored #(is (= (str esc "[38;5;98m=> Running task t..." esc "[0m")
+                   (style/task-header "t")))))
+
+;; ---------------------------------------------------------------------------
+;; color-enabled? (pure: injected getenv + tty predicate)
+;; ---------------------------------------------------------------------------
+
+(defn- fake-getenv [m]
+  (fn [k] (get m k "")))
+
+(def ^:private tty (constantly true))
+(def ^:private no-tty (constantly false))
+
+(deftest color-enabled-when-tty-and-no-opt-out
+  (is (true? (style/color-enabled? (fake-getenv {}) tty))))
+
+(deftest color-disabled-by-rite-no-color
+  (is (false? (style/color-enabled? (fake-getenv {"RITE_NO_COLOR" "1"}) tty))))
+
+(deftest color-disabled-by-no-color
+  (is (false? (style/color-enabled? (fake-getenv {"NO_COLOR" "1"}) tty))))
+
+(deftest color-disabled-when-not-a-tty
+  (is (false? (style/color-enabled? (fake-getenv {}) no-tty))))
+
+(deftest color-disabled-when-tty-check-throws
+  (is (false? (style/color-enabled? (fake-getenv {})
+                                    (fn [] (throw (ex-info "no tty" {})))))))
