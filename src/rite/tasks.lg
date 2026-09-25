@@ -25,10 +25,10 @@
 ;;     any other {{...}} content passes through. A :run string is expanded
 ;;     then whitespace-split.
 ;;
-;; A task's :env is set around its own steps and restored afterwards; its :cwd
-;; wraps each step in `sh` with a cd (rite's own directory never changes, and
-;; let-go's chdir is Linux-only). Neither reaches the task's :depends entries,
-;; which are separate plan entries with their own :env/:cwd.
+;; A task's :env is set around each step's process and restored after it; its
+;; :cwd wraps each step in `sh` with a cd (rite's own directory never changes,
+;; and let-go's chdir is Linux-only). Neither reaches the task's :depends
+;; entries, which are separate plan entries with their own :env/:cwd.
 ;; --------------------------------------------------------------------------
 
 (defn- as-string [value]
@@ -83,16 +83,16 @@
       (write! *err* (str "+ sh -c " full "\n")))
     (os/exec* "sh" "-c" full)))
 
-(defn- run-run-step! [value bindings sp-value cwd verbose?]
+(defn- run-run-step! [value bindings exe sp-value cwd verbose?]
   (let [argv (run-argv value bindings)]
     (write! *err* (str "\n" (style/step-line (str/join " " argv)) "\n"))
-    (script/exec-script! sp-value argv verbose? cwd)))
+    (script/exec-script! exe sp-value argv verbose? cwd)))
 
-(defn- run-step! [step bindings sp-value cwd verbose?]
+(defn- run-step! [step bindings exe sp-value cwd verbose?]
   (cond
     (contains? step :sh) (run-sh-step! (:sh step) bindings cwd verbose?)
     (contains? step :run)
-    (run-run-step! (:run step) bindings sp-value cwd verbose?)
+    (run-run-step! (:run step) bindings exe sp-value cwd verbose?)
     :else (throw (ex-info "step has no action key" {:step step}))))
 
 (defn- set-env!
@@ -130,23 +130,29 @@
    1-based step to *err*. The :run basis is resolved lazily — once, on the
    first :run step actually reached — so an earlier failing :sh step never
    triggers a dep fetch, and multiple :run steps share one resolution. `env`
-   is set around each step's process only, never around basis resolution, so
-   a task's HOME/RITE_HOME cannot redirect rite's own dependency cache."
+   is set around each step's process only, never around basis resolution or
+   the lookup of rite's own executable, so a task's HOME/RITE_HOME cannot
+   redirect rite's dependency cache and its PATH cannot change which rite a
+   :run step re-execs."
   [name task bindings project env cwd verbose?]
-  (loop [steps (or (:do task) [])
-         i 1
-         sp-value :unresolved]
-    (if (empty? steps)
-      0
-      (let [step (first steps)
-            sp (if (and (contains? step :run) (= sp-value :unresolved))
-                 (script/resolve-basis! project task)
-                 sp-value)
-            exit (with-env! env #(run-step! step bindings sp cwd verbose?))]
-        (if (zero? exit)
-          (recur (rest steps) (inc i) sp)
-          (do (write! *err* (str "\n" (style/failure-line name i exit) "\n"))
-              exit))))))
+  (let [exe (when (some #(contains? % :run) (or (:do task) []))
+              (script/resolve-exe (first os/args) (os/cwd) (os/getenv "PATH")
+                                  file-exists?))]
+    (loop [steps (or (:do task) [])
+           i 1
+           sp-value :unresolved]
+      (if (empty? steps)
+        0
+        (let [step (first steps)
+              sp (if (and (contains? step :run) (= sp-value :unresolved))
+                   (script/resolve-basis! project task)
+                   sp-value)
+              exit (with-env! env
+                     #(run-step! step bindings exe sp cwd verbose?))]
+          (if (zero? exit)
+            (recur (rest steps) (inc i) sp)
+            (do (write! *err* (str "\n" (style/failure-line name i exit) "\n"))
+                exit)))))))
 
 (defn- run-entry!
   "Run one plan entry: print its header, then run its steps with its :env set

@@ -532,7 +532,9 @@ cat > "$proj/rite.edn" <<'EOF'
          cwdt  {:cwd "sub dir"
                 :do [{:sh "basename \"$PWD\""} {:run ["show.lg"]}]}
          multi {:cwd "sub dir" :do [{:sh "echo a; echo b"}]}
-         nodir {:cwd "missing" :do [{:sh "echo first; echo second"}]}}}
+         nodir {:cwd "missing" :do [{:sh "echo first; echo second"}]}
+         pathenv {:env {"PATH" "/usr/bin:/bin"} :cwd "sub dir"
+                  :do [{:run ["show.lg"]}]}}}
 EOF
 out="$(cd "$proj" && RITE_HOME="$home" "$RITE" envt bob 2>/dev/null)"
 assert_eq "$out" "hi bob/debug/3" ":env: set for the step, templates expanded, number stringified"
@@ -564,6 +566,10 @@ ln -s "$RITE" "$proj/rite-bin"
 out="$(cd "$proj" && RITE_HOME="$home" ./rite-bin cwdt 2>/dev/null)"
 assert_eq "$out" "sub dir
 show.lg found: true" ":cwd: :run works when rite is invoked by a relative path"
+# rite on PATH by bare name, task :env replacing PATH: the :run re-exec must
+# still find this rite (resolved before the task env applies).
+set +e; out="$(cd "$proj" && PATH="$(dirname "$RITE"):$PATH" RITE_HOME="$home" rite pathenv 2>/dev/null)"; set -e
+assert_eq "$out" "show.lg found: true" ":env PATH: :run still re-execs this rite"
 # rite-managed variables are rejected at load.
 cat > "$proj/rite.edn" <<'EOF'
 {:tasks {bad {:env {"RITE_SCRIPT" "1"} :do [{:sh "echo hi"}]}}}

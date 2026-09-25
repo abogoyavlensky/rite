@@ -97,3 +97,26 @@
 
 (deftest absolute-exe-keeps-bare-name
   (is (= "rite" (script/absolute-exe "rite" "/p"))))
+
+;; ---------------------------------------------------------------------------
+;; resolve-exe — rite's own executable, found before any task :env applies
+;; ---------------------------------------------------------------------------
+
+(deftest resolve-exe-slash-path-made-absolute
+  (is (= "/p/./bin/rite"
+         (script/resolve-exe "./bin/rite" "/p" "/usr/bin" (constantly true)))))
+
+(deftest resolve-exe-bare-name-found-on-path
+  (let [exists? #{"/opt/rite/bin/rite"}]
+    (is (= "/opt/rite/bin/rite"
+           (script/resolve-exe "rite" "/p"
+                               (str "/usr/bin" os/path-separator "/opt/rite/bin")
+                               exists?)))))
+
+(deftest resolve-exe-relative-path-entry-joined-to-cwd
+  (let [exists? #{"/p/bin/rite"}]
+    (is (= "/p/bin/rite"
+           (script/resolve-exe "rite" "/p" "bin" exists?)))))
+
+(deftest resolve-exe-bare-name-not-found-unchanged
+  (is (= "rite" (script/resolve-exe "rite" "/p" "/usr/bin" (constantly false)))))
