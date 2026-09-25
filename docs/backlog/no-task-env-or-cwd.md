@@ -1,6 +1,7 @@
 # Tasks cannot set environment variables or a working directory for their steps
 
-**Status: open**
+**Status: planned**
+Plan: docs/plans/2026-09-25-2226-backlog-sweep.md
 
 ## Problem
 

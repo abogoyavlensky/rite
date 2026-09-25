@@ -1,6 +1,7 @@
 # Colored status output is emitted when stderr is not a terminal
 
-**Status: open**
+**Status: planned**
+Plan: docs/plans/2026-09-25-2226-backlog-sweep.md
 
 ## Problem
 

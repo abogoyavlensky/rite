@@ -1,6 +1,7 @@
 # `rite install` reads as toolchain setup but only fetches `:deps`
 
-**Status: open**
+**Status: planned**
+Plan: docs/plans/2026-09-25-2226-backlog-sweep.md
 
 ## Problem
 

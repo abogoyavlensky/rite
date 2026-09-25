@@ -1,6 +1,7 @@
 # A failing step ends the run with no message naming the task or step
 
-**Status: open**
+**Status: planned**
+Plan: docs/plans/2026-09-25-2226-backlog-sweep.md
 
 ## Problem
 
