@@ -104,19 +104,20 @@
 
 (deftest resolve-exe-slash-path-made-absolute
   (is (= "/p/./bin/rite"
-         (script/resolve-exe "./bin/rite" "/p" "/usr/bin" (constantly true)))))
+         (script/resolve-exe "./bin/rite" "/p" (constantly "/elsewhere/rite")))))
 
-(deftest resolve-exe-bare-name-found-on-path
-  (let [exists? #{"/opt/rite/bin/rite"}]
-    (is (= "/opt/rite/bin/rite"
-           (script/resolve-exe "rite" "/p"
-                               (str "/usr/bin" os/path-separator "/opt/rite/bin")
-                               exists?)))))
+(deftest resolve-exe-bare-name-uses-lookup
+  (is (= "/opt/rite/bin/rite"
+         (script/resolve-exe "rite" "/p" {"rite" "/opt/rite/bin/rite"}))))
 
-(deftest resolve-exe-relative-path-entry-joined-to-cwd
-  (let [exists? #{"/p/bin/rite"}]
-    (is (= "/p/bin/rite"
-           (script/resolve-exe "rite" "/p" "bin" exists?)))))
+(deftest resolve-exe-relative-lookup-result-joined-to-cwd
+  ;; A relative PATH entry makes `command -v` print a relative path.
+  (is (= "/p/bin/rite"
+         (script/resolve-exe "rite" "/p" {"rite" "bin/rite"}))))
 
-(deftest resolve-exe-bare-name-not-found-unchanged
-  (is (= "rite" (script/resolve-exe "rite" "/p" "/usr/bin" (constantly false)))))
+(deftest resolve-exe-not-found-unchanged
+  (is (= "rite" (script/resolve-exe "rite" "/p" (constantly nil)))))
+
+(deftest resolve-exe-slashless-lookup-result-unchanged
+  ;; `command -v` prints a bare word for a builtin or function, never a path.
+  (is (= "rite" (script/resolve-exe "rite" "/p" {"rite" "rite"}))))

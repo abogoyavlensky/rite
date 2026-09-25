@@ -570,6 +570,12 @@ show.lg found: true" ":cwd: :run works when rite is invoked by a relative path"
 # still find this rite (resolved before the task env applies).
 set +e; out="$(cd "$proj" && PATH="$(dirname "$RITE"):$PATH" RITE_HOME="$home" rite pathenv 2>/dev/null)"; set -e
 assert_eq "$out" "show.lg found: true" ":env PATH: :run still re-execs this rite"
+# A directory and a non-executable file named rite earlier on PATH are skipped,
+# as the shell skips them.
+mkdir -p "$proj/shadow/rite" "$proj/noexec"
+: > "$proj/noexec/rite"
+set +e; out="$(cd "$proj" && PATH="$proj/shadow:$proj/noexec:$(dirname "$RITE"):$PATH" RITE_HOME="$home" rite pathenv 2>/dev/null)"; set -e
+assert_eq "$out" "show.lg found: true" ":env PATH: exe lookup skips dirs and non-executables"
 # rite-managed variables are rejected at load.
 cat > "$proj/rite.edn" <<'EOF'
 {:tasks {bad {:env {"RITE_SCRIPT" "1"} :do [{:sh "echo hi"}]}}}

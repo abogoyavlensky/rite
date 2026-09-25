@@ -136,8 +136,8 @@
    :run step re-execs."
   [name task bindings project env cwd verbose?]
   (let [exe (when (some #(contains? % :run) (or (:do task) []))
-              (script/resolve-exe (first os/args) (os/cwd) (os/getenv "PATH")
-                                  file-exists?))]
+              (script/resolve-exe (first os/args) (os/cwd)
+                                  script/shell-lookup))]
     (loop [steps (or (:do task) [])
            i 1
            sp-value :unresolved]
