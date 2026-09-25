@@ -309,7 +309,12 @@ EOF
        :paths ["scripts"]
        :deps {test/greet {:git/url "file://$bare"
                           :git/sha "$sha"}}
-       :do [{:run ["scripts/hi.lg" "world"]}]}}}
+       :do [{:run ["scripts/hi.lg" "world"]}]}
+  sayenv {:paths ["scripts"]
+          :deps {test/greet {:git/url "file://$bare"
+                             :git/sha "$sha"}}
+          :env {"RITE_HOME" "$home/fake"}
+          :do [{:run ["scripts/hi.lg" "env"]}]}}}
 EOF
     out="$(cd "$proj" && RITE_HOME="$home" "$RITE" say 2>&1)"
     assert_contains "$out" "hello world from dep" \
@@ -323,6 +328,13 @@ EOF
     out2="$(cd "$proj" && RITE_HOME="$home" "$RITE" say 2>&1)"
     assert_not_contains "$out2" "installing" ":run: second run reuses the cache"
     assert_contains "$out2" "hello world from dep" ":run: second run still works"
+    # A task :env is set around the step's process only: a RITE_HOME in :env
+    # must not redirect rite's own dep resolution to another cache.
+    out3="$(cd "$proj" && RITE_HOME="$home" "$RITE" sayenv 2>&1)"
+    assert_contains "$out3" "hello env from dep" ":run + :env: script still runs"
+    assert_not_contains "$out3" "installing" ":run + :env: deps resolved from rite's own cache"
+    [[ ! -e "$home/fake" ]] || fail ":run + :env: task RITE_HOME leaked into dep resolution"
+    pass ":run + :env: task RITE_HOME not used for the dep cache"
     rm -rf "$proj" "$home"
 else
     skip ":run scenario requires git"
@@ -538,6 +550,9 @@ assert_eq "$out" "a
 b" ":cwd: compound :sh command keeps its syntax"
 out="$(cd "$proj" && RITE_HOME="$home" "$RITE" --verbose envt bob 2>&1)"
 assert_contains "$out" "+ env GREETING=hi bob LEVEL=debug NUM=3" ":env: --verbose prints the resolved env"
+err="$(cd "$proj" && RITE_HOME="$home" "$RITE" multi 2>&1 >/dev/null)"
+assert_contains "$err" "$ echo a; echo b" ":cwd: step line shows the task's own command"
+assert_not_contains "$err" "|| exit" ":cwd: step line hides the cd wrapper"
 set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" nodir 2>/dev/null)"; rc=$?; set -e
 [[ $rc -ne 0 ]] || fail ":cwd missing: expected non-zero exit"
 pass ":cwd missing: non-zero exit"

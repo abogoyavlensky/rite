@@ -74,12 +74,14 @@
        "\n"))
 
 (defn- run-sh-step! [value bindings cwd verbose?]
-  (let [cmd (cond-> (sh-command value bindings)
-              cwd (with-cwd cwd))]
+  (let [cmd (sh-command value bindings)
+        full (if cwd (with-cwd cmd cwd) cmd)]
+    ;; The step line shows the task's own command; only --verbose shows the
+    ;; cd wrapper that applies :cwd.
     (write! *err* (str "\n" (style/step-line cmd) "\n"))
     (when verbose?
-      (write! *err* (str "+ sh -c " cmd "\n")))
-    (os/exec* "sh" "-c" cmd)))
+      (write! *err* (str "+ sh -c " full "\n")))
+    (os/exec* "sh" "-c" full)))
 
 (defn- run-run-step! [value bindings sp-value cwd verbose?]
   (let [argv (run-argv value bindings)]
@@ -109,13 +111,28 @@
   (doseq [[k v] prev]
     (os/setenv k (or v ""))))
 
+(defn- with-env!
+  "Call `f` with `env` set in the process environment, restoring the previous
+   values afterwards, including when f throws. Returns f's result."
+  [env f]
+  (let [prev (set-env! env)
+        result (try
+                 (f)
+                 (catch e
+                        (do (restore-env! prev)
+                            (throw e))))]
+    (restore-env! prev)
+    result))
+
 (defn- run-steps!
   "Run `task`'s :do steps in order. Returns the first non-zero step exit, or
    0; a non-zero exit first writes a failure line naming the task and the
    1-based step to *err*. The :run basis is resolved lazily — once, on the
    first :run step actually reached — so an earlier failing :sh step never
-   triggers a dep fetch, and multiple :run steps share one resolution."
-  [name task bindings project cwd verbose?]
+   triggers a dep fetch, and multiple :run steps share one resolution. `env`
+   is set around each step's process only, never around basis resolution, so
+   a task's HOME/RITE_HOME cannot redirect rite's own dependency cache."
+  [name task bindings project env cwd verbose?]
   (loop [steps (or (:do task) [])
          i 1
          sp-value :unresolved]
@@ -125,16 +142,16 @@
             sp (if (and (contains? step :run) (= sp-value :unresolved))
                  (script/resolve-basis! project task)
                  sp-value)
-            exit (run-step! step bindings sp cwd verbose?)]
+            exit (with-env! env #(run-step! step bindings sp cwd verbose?))]
         (if (zero? exit)
           (recur (rest steps) (inc i) sp)
           (do (write! *err* (str "\n" (style/failure-line name i exit) "\n"))
               exit))))))
 
 (defn- run-entry!
-  "Run one plan entry: print its header, set its :env, run its steps from its
-   :cwd (absolutized against `project`), then restore the env whether the
-   steps passed or failed. Returns the first non-zero step exit, or 0."
+  "Run one plan entry: print its header, then run its steps with its :env set
+   and from its :cwd (absolutized against `project`). Returns the first
+   non-zero step exit, or 0."
   [entry project verbose?]
   (let [name (:name entry)
         task (:task entry)
@@ -144,14 +161,7 @@
     (write! *err* (str (style/task-header name) "\n"))
     (when (and verbose? (seq env))
       (write! *err* (env-trace-line env)))
-    (let [prev (set-env! env)
-          exit (try
-                 (run-steps! name task bindings project cwd verbose?)
-                 (catch e
-                        (do (restore-env! prev)
-                            (throw e))))]
-      (restore-env! prev)
-      exit)))
+    (run-steps! name task bindings project env cwd verbose?)))
 
 (defn run-plan!
   "Run each entry of `plan` (a plan/build-plan :plan vector) in order. The
