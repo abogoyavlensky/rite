@@ -290,7 +290,7 @@
 ;; ---------------------------------------------------------------------------
 
 (deftest install-report-lines-empty
-  (is (= ["no dependencies to install"]
+  (is (= ["nothing to fetch: no task declares :deps"]
          (deps/install-report-lines []))))
 
 (deftest install-report-lines-all-cached

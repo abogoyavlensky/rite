@@ -463,7 +463,7 @@ cat > "$nodeps/rite.edn" <<'EOF'
 EOF
 set +e; out="$(cd "$nodeps" && RITE_HOME="$ndhome" "$RITE" install 2>&1)"; rc=$?; set -e
 [[ $rc -eq 0 ]] || fail "install no-deps: expected exit 0 (got $rc)"
-assert_contains "$out" "no dependencies to install" "install no-deps: message"
+assert_contains "$out" "nothing to fetch: no task declares :deps" "install no-deps: message"
 rm -rf "$nodeps" "$ndhome"
 
 # A fetch failure (dep points at a repo that was never created) exits 1 with a
