@@ -1,5 +1,7 @@
 # `rite tasks --deps` Implementation Plan
 
+**Status: complete** (2026-09-26)
+
 > **For agentic workers:** Use executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the `rite install` built-in with `rite tasks --deps`, so `tasks` is the only word command and `install` is free as a user task name.
@@ -88,16 +90,16 @@ The rows are hand-aligned to `doc-col` 31 in `src/rite/help.lg`. `"  rite tasks 
 - Modify: `src/rite/cli.lg`
 - Test: `test/rite/cli_test.lg`
 
-- [ ] **Step 1: Write failing tests** in `test/rite/cli_test.lg`, under a new section header matching the existing style:
+- [x] **Step 1: Write failing tests** in `test/rite/cli_test.lg`, under a new section header matching the existing style:
   - `[]` → `{:mode :list}`
   - `["--deps"]` → `{:mode :deps}`
   - `["foo"]` → `{:error "unknown argument 'foo'"}`
   - `["--bogus"]` → `{:error "unknown argument '--bogus'"}`
   - `["--deps" "x"]` → `{:error "unknown argument 'x'"}`
-- [ ] **Step 2: Run** `lgx test` and confirm the new tests fail because `parse-tasks-args` is unresolved.
-- [ ] **Step 3: Implement** `parse-tasks-args` in `src/rite/cli.lg` with a docstring in the same style as `parse-leading-flags`. Accept `args` as any seqable (callers pass a vector).
-- [ ] **Step 4: Run** `lgx test`. Expected: all pass.
-- [ ] **Step 5: Commit** `git commit -am "feat: parse rite tasks arguments"`
+- [x] **Step 2: Run** `lgx test` and confirm the new tests fail because `parse-tasks-args` is unresolved.
+- [x] **Step 3: Implement** `parse-tasks-args` in `src/rite/cli.lg` with a docstring in the same style as `parse-leading-flags`. Accept `args` as any seqable (callers pass a vector).
+- [x] **Step 4: Run** `lgx test`. Expected: all pass.
+- [x] **Step 5: Commit** `git commit -am "feat: parse rite tasks arguments"`
 
 ### Task 2: Wire `rite tasks --deps` and remove the `install` command
 
@@ -105,53 +107,63 @@ The rows are hand-aligned to `doc-col` 31 in `src/rite/help.lg`. `"  rite tasks 
 - Modify: `main.lg`, `src/rite/config.lg`, `src/rite/completion.lg`, `src/rite/help.lg`, `src/rite/deps.lg`
 - Test: `test/rite/config_test.lg`, `test/rite/help_test.lg`, `test/rite/completion_test.lg`
 
-- [ ] **Step 1: Update unit tests first.**
+- [x] **Step 1: Update unit tests first.**
   - `config_test.lg`: the reserved set becomes `#{"tasks" "completion" "__complete"}`. Add `load-accepts-install-task-name`, which checks that `(load-cfg {:tasks {'install {:do [{:sh "echo hi"}]}}})` has no `:errors`. Follow how nearby tests assert a successful load.
   - `help_test.lg`: in `usage-has-synopsis-and-sections`, replace `"rite install"` with `"rite tasks --deps"`, and add `(is (not (str/includes? u "rite install")))`.
   - `completion_test.lg`: remove `"install"` from the expected vectors on lines 27, 31 and 48, and update the comments on lines 25 and 46.
-- [ ] **Step 2: Run** `lgx test` and confirm these tests fail.
-- [ ] **Step 3: Implement.**
+- [x] **Step 2: Run** `lgx test` and confirm these tests fail.
+- [x] **Step 3: Implement.**
   - `src/rite/config.lg`: remove `"install"` from `reserved-task-names` and from the comment above it.
   - `src/rite/completion.lg`: `(def builtin-commands ["tasks"])`, and fix the comments that name install.
   - `src/rite/help.lg`: replace the install row with `"  rite tasks --deps            Fetch every task's :deps into the cache\n"`. Check the description starts at column 31, like the rows above it.
   - `src/rite/deps.lg`: change the section comment `install command: fetch every task's :deps up front` to name `rite tasks --deps`.
   - `main.lg`: rename `cmd-install!` to `cmd-fetch-deps!` and change its error prefix to `rite: tasks --deps: `. `cmd-tasks!` takes `rest-args` and calls `cli/parse-tasks-args` first. On `:error` it writes `rite: tasks: <error>. See 'rite --help'.\n` to `*err*` and runs `(os/exit 1)`. On `:deps` it calls `cmd-fetch-deps!`. On `:list` it runs the existing listing body. In `dispatch`, change the tasks case to `"tasks" (cmd-tasks! rest-args)` and delete the `"install"` case.
-- [ ] **Step 4: Run** `lgx test`. Expected: all pass.
-- [ ] **Step 5: Commit** `git commit -am "feat: replace rite install with rite tasks --deps"`
+- [x] **Step 4: Run** `lgx test`. Expected: all pass.
+- [x] **Step 5: Commit** `git commit -am "feat: replace rite install with rite tasks --deps"`
 
 ### Task 3: E2E coverage
 
 **Files:**
 - Modify: `tests/e2e.sh`
 
-- [ ] **Step 1: Update Scenario 10.**
+- [x] **Step 1: Update Scenario 10.**
   - Retitle it `rite tasks --deps fetches every task's :deps`.
   - Replace both `"$RITE" install` calls with `"$RITE" tasks --deps`.
   - Change the assertion labels from `install:` to `tasks --deps:`.
   - Replace the check that completion offers `install` with a check that `__complete ""` does **not** contain `install`. The project has no `install` task, so this holds.
   - Do the same rename in the no-deps block after it.
   - Do the same in the fetch-failure block (around line 511): invoke `"$RITE" tasks --deps`, expect the prefix `rite: tasks --deps:` in place of `rite: install:`, and relabel the assertions and the `skip` message.
-- [ ] **Step 2: Update the completion scenario (Scenario 9).** The invalid-config expectation `$'install\ntasks'` becomes `tasks`. Fix the comment above it if needed.
-- [ ] **Step 3: Add checks**, either at the end of Scenario 10 or as a small new block in the same style, using `mktemp -d` dirs:
+- [x] **Step 2: Update the completion scenario (Scenario 9).** The invalid-config expectation `$'install\ntasks'` becomes `tasks`. Fix the comment above it if needed.
+- [x] **Step 3: Add checks**, either at the end of Scenario 10 or as a small new block in the same style, using `mktemp -d` dirs:
   - A `rite.edn` with `{:tasks {install {:do [{:sh "echo user-install"}]}}}`: `rite install` exits 0, and its output contains `user-install`.
   - A project without an `install` task: `rite install` exits 1, and its output contains `is not a task`.
   - `rite tasks bogus` exits 1, and its output contains `unknown argument 'bogus'`.
   - Run `rite tasks bogus` again in an empty `mktemp -d` dir that has no `rite.edn`. It should still exit 1 with `unknown argument 'bogus'`, and not the no-project error. This shows the arguments are checked before project lookup.
-- [ ] **Step 4: Run** `bash tests/run.sh`. Expected: `All tests passed.`
-- [ ] **Step 5: Commit** `git commit -am "test: cover rite tasks --deps and a user install task"`
+- [x] **Step 4: Run** `bash tests/run.sh`. Expected: `All tests passed.`
+- [x] **Step 5: Commit** `git commit -am "test: cover rite tasks --deps and a user install task"`
 
 ### Task 4: README
 
 **Files:**
 - Modify: `README.md`
 
-- [ ] **Step 1: Update the docs.**
+- [x] **Step 1: Update the docs.**
   - CLI table (around line 293): replace the `rite install` line with `rite tasks --deps        # fetch every task's :deps into the cache`, and keep the `#` comments aligned.
   - `:deps` paragraph (around line 244): change `run \`rite install\`` to `run \`rite tasks --deps\``.
   - Reserved-names paragraph (around line 113): it already omits `install`, so leave it alone unless it now reads wrong. Grep the README for `install` and check that no other command reference is left. The `brew install`/`mise install` lines stay.
-- [ ] **Step 2: Grep for leftovers** with `grep -rn "rite install" src test tests README.md main.lg`. Expected: only the new e2e checks and the help test's absence assertion.
-- [ ] **Step 3: Commit** `git commit -am "docs: document rite tasks --deps"`
+- [x] **Step 2: Grep for leftovers** with `grep -rn "rite install" src test tests README.md main.lg`. Expected: only the new e2e checks and the help test's absence assertion.
+- [x] **Step 3: Commit** `git commit -am "docs: document rite tasks --deps"`
 
 ### Task 5: Mark the plan complete
 
-- [ ] **Step 1:** Add `**Status: complete** (<date>)` under this plan's title, then `git commit -am "docs: mark tasks --deps plan complete"`.
+- [x] **Step 1:** Add `**Status: complete** (<date>)` under this plan's title, then `git commit -am "docs: mark tasks --deps plan complete"`.
+
+## Summary
+
+`rite install` is gone. `rite tasks --deps` fetches every task's `:deps` with the same output. `rite tasks` rejects any other argument, and it does so before looking for `rite.edn`. `install` is now a free task name. The argument parsing is the pure `cli/parse-tasks-args`. In `main.lg`, `cmd-tasks!` dispatches to `cmd-list-tasks!` or `cmd-fetch-deps!`. The help text, completion builtins, reserved names, README and e2e tests are all updated. Unit tests: 328 tests, 0 failures. `bash tests/run.sh`: all passed.
+
+Issues: none. The codex review of Task 2 flagged the stale e2e tests, which Task 3 already covered. The other reviews were clean.
+
+Deviations: none. The listing body moved into its own `cmd-list-tasks!`, which is within what the plan described.
+
+What the plan could have specified better: nothing significant. The fetch-failure e2e block was missed at first and caught by the pre-execution plan review.
