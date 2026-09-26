@@ -55,3 +55,23 @@
 (deftest user-args-bundle-no-command
   ;; ./rite — no user args at all.
   (is (= [] (vec (cli/user-args ["rite"])))))
+
+;; ---------------------------------------------------------------------------
+;; parse-tasks-args — `rite tasks` lists, `rite tasks --deps` fetches deps
+;; ---------------------------------------------------------------------------
+
+(deftest parse-tasks-args-empty-lists
+  (is (= {:mode :list} (cli/parse-tasks-args []))))
+
+(deftest parse-tasks-args-deps
+  (is (= {:mode :deps} (cli/parse-tasks-args ["--deps"]))))
+
+(deftest parse-tasks-args-unknown-word
+  (is (= {:error "unknown argument 'foo'"} (cli/parse-tasks-args ["foo"]))))
+
+(deftest parse-tasks-args-unknown-flag
+  (is (= {:error "unknown argument '--bogus'"} (cli/parse-tasks-args ["--bogus"]))))
+
+(deftest parse-tasks-args-deps-with-extra
+  ;; The first token past a lone leading --deps is the bad one.
+  (is (= {:error "unknown argument 'x'"} (cli/parse-tasks-args ["--deps" "x"]))))

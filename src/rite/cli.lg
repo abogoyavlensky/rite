@@ -40,3 +40,17 @@
           :else
           {:verbose? verbose?
            :args (vec xs)})))))
+
+(defn parse-tasks-args
+  "Parse the args after the `tasks` command. No args lists the tasks
+   ({:mode :list}); a lone `--deps` fetches every task's :deps ({:mode :deps}).
+   Anything else is {:error \"unknown argument '<tok>'\"}, naming the first
+   token that isn't a lone leading --deps."
+  [args]
+  (let [args (vec args)]
+    (cond
+      (empty? args) {:mode :list}
+      (= ["--deps"] args) {:mode :deps}
+      :else
+      (let [bad (if (= "--deps" (first args)) (nth args 1) (first args))]
+        {:error (str "unknown argument '" bad "'")}))))
