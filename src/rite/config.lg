@@ -137,15 +137,54 @@
     :else
     [(str "must be a string or vector of strings, got " (pr-str v))]))
 
+(defn- depends-item-errors
+  "A dep entry's tail item: a string (with {{arg/*}}/{{var/*}} expansion) or
+   an :arg/<name>/:var/<name> forwarding keyword."
+  [item]
+  (when-not (or (string? item) (step-placeholder? item))
+    (str "must be a string, :arg/<name>, or :var/<name>, got " (pr-str item))))
+
+(defn- depends-entry-errors
+  "One :depends entry — or a :task step's value, which has the same shape: a
+   task symbol, or a non-empty vector whose head is a task symbol and whose
+   tail items are strings or forwarding placeholders."
+  [entry]
+  (cond
+    (symbol? entry) []
+
+    (vector? entry)
+    (cond
+      (empty? entry) ["must be a non-empty vector [task item...]"]
+
+      (not (symbol? (first entry)))
+      [{:path [0]
+        :msg (str "first element must be a task symbol, got "
+                  (pr-str (first entry)))}]
+
+      :else
+      (loop [i 1
+             acc []]
+        (if (>= i (count entry))
+          acc
+          (let [e (depends-item-errors (nth entry i))]
+            (recur (inc i)
+                   (if e (conj acc {:path [i]
+                                    :msg e}) acc))))))
+
+    :else
+    [(str "must be a task symbol or [task item...] vector, got "
+          (pr-str entry))]))
+
 (defn- exactly-one-action-errors [step]
-  (when (not= 1 (count (filter #(contains? step %) [:sh :run])))
-    "must contain exactly one of :sh, :run"))
+  (when (not= 1 (count (filter #(contains? step %) [:sh :run :task])))
+    "must contain exactly one of :sh, :run, :task"))
 
 (def ^:private step-schema
   [:and
    [:map {:closed true}
     [:sh {:optional true} [:fn action-value-errors]]
-    [:run {:optional true} [:fn action-value-errors]]]
+    [:run {:optional true} [:fn action-value-errors]]
+    [:task {:optional true} [:fn depends-entry-errors]]]
    [:fn exactly-one-action-errors]])
 
 (defn- do-errors
@@ -249,43 +288,6 @@
 
 (def ^:private args-schema
   [:and [:vector {:min 1} arg-schema] [:fn args-vector-errors]])
-
-(defn- depends-item-errors
-  "A dep entry's tail item: a string (with {{arg/*}}/{{var/*}} expansion) or
-   an :arg/<name>/:var/<name> forwarding keyword."
-  [item]
-  (when-not (or (string? item) (step-placeholder? item))
-    (str "must be a string, :arg/<name>, or :var/<name>, got " (pr-str item))))
-
-(defn- depends-entry-errors
-  "One :depends entry: a task symbol, or a non-empty vector whose head is a
-   task symbol and whose tail items are strings or forwarding placeholders."
-  [entry]
-  (cond
-    (symbol? entry) []
-
-    (vector? entry)
-    (cond
-      (empty? entry) ["must be a non-empty vector [task item...]"]
-
-      (not (symbol? (first entry)))
-      [{:path [0]
-        :msg (str "first element must be a task symbol, got "
-                  (pr-str (first entry)))}]
-
-      :else
-      (loop [i 1
-             acc []]
-        (if (>= i (count entry))
-          acc
-          (let [e (depends-item-errors (nth entry i))]
-            (recur (inc i)
-                   (if e (conj acc {:path [i]
-                                    :msg e}) acc))))))
-
-    :else
-    [(str "must be a task symbol or [task item...] vector, got "
-          (pr-str entry))]))
 
 (def ^:private depends-schema
   [:vector {:min 1} [:fn depends-entry-errors]])
@@ -407,11 +409,14 @@
   "Errors for one valid step: every :arg/* keyword item or {{arg/*}} string
    token must name a declared arg, every :var/* a defined var. Paths are
    relative to the step — [:sh j] for a vector item, [:sh] for a string
-   step value."
+   step value. A :task step is skipped: task-steps-refs-errors checks it like
+   a :depends entry."
   [declared arg-label defined-vars var-label step]
   (let [k (if (contains? step :sh) :sh :run)
         v (get step k)]
     (cond
+      (contains? step :task) []
+
       (string? v)
       (string-token-errors declared arg-label defined-vars var-label [k] v)
 
@@ -496,10 +501,11 @@
                    (task-ref-errors task-name task defined-vars var-label))
                  (or (:tasks cfg) {})))))
 
-;; --- :depends semantic cross-checks: every entry names a defined task; entry
-;; --- placeholders (keywords and {{arg/*}}/{{var/*}} string tokens) forward a
-;; --- parent arg / defined var; literal-only entries are value-checked against
-;; --- the dep's :args; and the name graph is acyclic.
+;; --- :depends and :task-step semantic cross-checks: every entry names a
+;; --- defined task; entry placeholders (keywords and {{arg/*}}/{{var/*}} string
+;; --- tokens) forward a parent arg / defined var; literal-only entries are
+;; --- value-checked against the callee's :args; and the name graph — :depends
+;; --- and :task edges alike — is acyclic.
 
 (defn- entry-value-checkable?
   "True when every tail item is a plain literal string (no recognized
@@ -512,15 +518,16 @@
           items))
 
 (defn- depends-entry-ref-errors
-  "Semantic errors for one :depends entry of task `parent-name`, at
-   base-path [:tasks parent-name :depends idx]."
-  [tasks defined-vars parent-name parent-declared parent-arg-label entry idx]
+  "Semantic errors for one :depends entry — or :task step value — of task
+   `parent-name`, all anchored at `base-path`. `verb` (\"depends on\" or
+   \"calls\") leads the unknown-task and argument-mismatch messages."
+  [tasks defined-vars parent-name parent-declared parent-arg-label entry verb
+   base-path]
   (let [dep-name (if (symbol? entry) entry (first entry))
-        items (if (symbol? entry) [] (vec (rest entry)))
-        base-path [:tasks parent-name :depends idx]]
+        items (if (symbol? entry) [] (vec (rest entry)))]
     (if-not (contains? tasks dep-name)
       [{:path base-path
-        :msg (str "depends on undefined task " dep-name " (defined: "
+        :msg (str verb " undefined task " dep-name " (defined: "
                   (str/join ", " (sort (map str (keys tasks)))) ")")}]
       (let [dep-task (get tasks dep-name)
             dep-decls (or (:args dep-task) [])
@@ -561,7 +568,7 @@
           (let [r (args/bind-args dep-decls items)]
             (if (:errors r)
               (mapv (fn [e] {:path base-path
-                             :msg (str "depends on " dep-name ": " e)})
+                             :msg (str verb " " dep-name ": " e)})
                     (:errors r))
               []))
 
@@ -572,7 +579,23 @@
 
           :else [])))))
 
-(defn- depends-refs-errors [cfg]
+(defn- task-steps
+  "[step path-suffix] for each :task step of `task`, walking both :do forms
+   (validation runs before normalize-config): the suffix is [:do] for a
+   single step map, [:do i] for a vector of steps."
+  [task]
+  (let [d (:do task)]
+    (cond
+      (nil? d) []
+      (map? d) (if (contains? d :task) [[d [:do]]] [])
+      :else (vec (keep (fn [i]
+                         (when (contains? (nth d i) :task)
+                           [(nth d i) [:do i]]))
+                       (range (count d)))))))
+
+(defn- depends-refs-errors
+  "Semantic errors for every task's :depends entries, then its :task steps."
+  [cfg]
   (let [tasks (or (:tasks cfg) {})
         vars (or (:vars cfg) {})
         defined-vars (set (map (fn [k] (keyword "var" (name k))) (keys vars)))]
@@ -585,43 +608,74 @@
                                       (str/join ", " (mapv (comp str :name)
                                                            decls)))
                    entries (or (:depends task) [])]
-               (mapcat (fn [i]
-                         (depends-entry-ref-errors tasks defined-vars
-                                                   parent-name parent-declared
-                                                   parent-arg-label
-                                                   (nth entries i) i))
-                       (range (count entries)))))
+               (concat
+                 (mapcat (fn [i]
+                           (depends-entry-ref-errors
+                             tasks defined-vars parent-name parent-declared
+                             parent-arg-label (nth entries i) "depends on"
+                             [:tasks parent-name :depends i]))
+                         (range (count entries)))
+                 (mapcat (fn [[step suffix]]
+                           (depends-entry-ref-errors
+                             tasks defined-vars parent-name parent-declared
+                             parent-arg-label (:task step) "calls"
+                             (vec (concat [:tasks parent-name] suffix
+                                          [:task]))))
+                         (task-steps task)))))
            tasks))))
 
-(defn- task-dep-names [task]
-  (mapv (fn [entry] (if (symbol? entry) entry (first entry)))
-        (or (:depends task) [])))
+(defn- entry-task-name
+  "The task symbol a :depends entry or :task step value names."
+  [entry]
+  (if (symbol? entry) entry (first entry)))
+
+(defn- task-dep-names
+  "Every task `task` runs: its :depends entries and its :task step callees —
+   the edges of the cycle check's graph."
+  [task]
+  (vec (concat (map entry-task-name (or (:depends task) []))
+               (map (fn [[step _]] (entry-task-name (:task step)))
+                    (task-steps task)))))
 
 (defn- dfs-cycle
-  "Depth-first search for a cycle reachable from `node`. Returns the cycle as a
-   vector of names (first repeated at the end), or nil."
-  [graph node path on-path]
-  (if (contains? on-path node)
-    (conj (vec (drop-while #(not= % node) path)) node)
+  "Depth-first search for a cycle reachable from `node`. Returns {:cycle c},
+   c the cycle as a vector of names (first repeated at the end), or {:done d}:
+   `done` grown by every node fully explored without finding one. Skipping
+   done nodes keeps the search linear — without it, parallel edges (a task
+   that both :depends on and calls another) and diamonds re-walk the same
+   subgraph exponentially often."
+  [graph node path on-path done]
+  (cond
+    (contains? on-path node)
+    {:cycle (conj (vec (drop-while #(not= % node) path)) node)}
+
+    (contains? done node)
+    {:done done}
+
+    :else
     (let [new-path (conj path node)
           new-on (conj on-path node)]
-      (loop [ds (get graph node [])]
+      (loop [ds (get graph node [])
+             done done]
         (if (empty? ds)
-          nil
-          (or (dfs-cycle graph (first ds) new-path new-on)
-              (recur (rest ds))))))))
+          {:done (conj done node)}
+          (let [r (dfs-cycle graph (first ds) new-path new-on done)]
+            (if (:cycle r)
+              r
+              (recur (rest ds) (:done r)))))))))
 
 (defn- depends-cycle-errors [cfg]
   (let [tasks (or (:tasks cfg) {})
         graph (into {} (map (fn [[k t]] [k (task-dep-names t)]) tasks))]
-    (loop [nodes (keys graph)]
+    (loop [nodes (keys graph)
+           done #{}]
       (if (empty? nodes)
         []
-        (let [c (dfs-cycle graph (first nodes) [] #{})]
-          (if c
+        (let [r (dfs-cycle graph (first nodes) [] #{} done)]
+          (if-let [c (:cycle r)]
             [{:path [:tasks (first c)]
               :msg (str "dependency cycle: " (str/join " -> " (map str c)))}]
-            (recur (rest nodes))))))))
+            (recur (rest nodes) (:done r))))))))
 
 (def ^:private rite-schema
   [:and

@@ -5,13 +5,21 @@
 ;; Execution plan
 ;;
 ;; Pure: flatten a task invocation and its :depends graph into an ordered,
-;; deduped list of {:name :task :bindings} entries, root last. Depth-first, in
-;; listed order, deps before their dependents. Deduped by
+;; deduped list of {:name :task :bindings :calls} entries, root last.
+;; Depth-first, in listed order, deps before their dependents. Deduped by
 ;; [task-name resolved-arg-strings] so a diamond dependency runs once, while
 ;; the same task invoked with different args runs once per distinct arg set.
+;;
+;; An entry's :calls maps the 0-based index of each :task step in its :do to
+;; {:name :args :plan}: the called task's own plan, built like a separate
+;; `rite <name> args` invocation — fresh dedup, never deduped against the
+;; outer plan. Building every call up front makes a bad forwarded value fail
+;; before anything runs.
+;;
 ;; Load-time validation (rite.config) has already checked task names, arg
-;; forwarding, and cycles; here the only new failure is a runtime arg value
-;; (a forwarded value that violates the dep's :type), surfaced as {:errors}.
+;; forwarding, and cycles (through :depends and :task steps alike, so the
+;; recursion here terminates); the only new failure is a runtime arg value
+;; (a forwarded value that violates the callee's :type), surfaced as {:errors}.
 ;; --------------------------------------------------------------------------
 
 (defn- resolve-item
@@ -32,10 +40,13 @@
     [(first entry)
      (mapv (fn [item] (resolve-item item bindings)) (rest entry))]))
 
-(defn- bind-error-msg [name ref err]
+(defn- bind-error-msg
+  "`ref` says how the task was reached — \"required by x\" or \"called by
+   x\" — or is nil for the root."
+  [name ref err]
   (if (nil? ref)
     (str "task " name ": " err)
-    (str "task " name " (required by " ref "): " err)))
+    (str "task " name " (" ref "): " err)))
 
 (declare add-task)
 
@@ -56,14 +67,45 @@
                     (str "task " parent-name " depends on unknown task "
                          dep-name))
             (add-task a tasks-map vars dep-name dep-task dep-args
-                      parent-name)))))
+                      (str "required by " parent-name))))))
     acc
     depends))
 
+(defn- build-calls
+  "Build a sub-plan for each :task step in `steps` (the caller's :do), with
+   args resolved against the caller's bindings. Returns {:calls {i call}} or
+   {:errors [...]} for the first call that fails."
+  [tasks-map vars caller-name bindings steps]
+  (reduce
+    (fn [acc i]
+      (let [step (nth steps i)]
+        (if (or (seq (:errors acc)) (not (contains? step :task)))
+          acc
+          (let [resolved (resolve-entry (:task step) bindings)
+                callee (first resolved)
+                callee-args (second resolved)
+                callee-task (get tasks-map callee)]
+            (if (nil? callee-task)
+              {:errors [(str "task " caller-name " calls unknown task "
+                             callee)]}
+              (let [sub (add-task {:plan []
+                                   :seen #{}
+                                   :errors []}
+                                  tasks-map vars callee callee-task callee-args
+                                  (str "called by " caller-name))]
+                (if (seq (:errors sub))
+                  {:errors (:errors sub)}
+                  (assoc-in acc [:calls i] {:name callee
+                                            :args callee-args
+                                            :plan (:plan sub)}))))))))
+    {:calls {}}
+    (range (count steps))))
+
 (defn- add-task
-  "Post-order: add all of task's transitive deps, then task itself. Skips a
-   [name arg-strings] key already present (dedup). `ref` names the task that
-   required this one, for error messages (nil for the root)."
+  "Post-order: add all of task's transitive deps, then task itself (with its
+   :calls sub-plans). Skips a [name arg-strings] key already present (dedup).
+   `ref` says how this task was reached (\"required by x\" / \"called by
+   x\"), for error messages (nil for the root)."
   [acc tasks-map vars name task arg-strings ref]
   (let [key [name arg-strings]]
     (if (contains? (:seen acc) key)
@@ -75,14 +117,22 @@
                   (mapv (fn [e] (bind-error-msg name ref e)) (:errors r)))
           (let [bindings (args/task-bindings vars (:bindings r))
                 acc (add-deps acc tasks-map vars name bindings
-                              (or (:depends task) []))]
-            (update acc :plan conj {:name name
-                                    :task task
-                                    :bindings bindings})))))))
+                              (or (:depends task) []))
+                calls (if (seq (:errors acc))
+                        {:calls {}}
+                        (build-calls tasks-map vars name bindings
+                                     (or (:do task) [])))]
+            (if (:errors calls)
+              (update acc :errors into (:errors calls))
+              (update acc :plan conj {:name name
+                                      :task task
+                                      :bindings bindings
+                                      :calls (:calls calls)}))))))))
 
 (defn build-plan
   "Flatten `root-name` (bound with `root-arg-strings`) and its :depends graph
-   into {:plan [{:name :task :bindings} ...]} (root last), or {:errors [...]}.
+   into {:plan [{:name :task :bindings :calls} ...]} (root last), or
+   {:errors [...]}.
    `tasks-map` is the normalized :tasks map; `vars` the project :vars."
   [tasks-map vars root-name root-arg-strings]
   (let [root-task (get tasks-map root-name)]

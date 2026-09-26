@@ -265,18 +265,18 @@
 
 (deftest load-rejects-step-with-multiple-action-keys
   (is (= {:errors [{:path [:tasks 'fmt :do 0]
-                    :msg "must contain exactly one of :sh, :run"}]}
+                    :msg "must contain exactly one of :sh, :run, :task"}]}
          (load-cfg {:tasks {'fmt {:do [{:sh "echo a"
                                         :run "scripts/foo.lg"}]}}}))))
 
 (deftest load-rejects-step-with-no-action-key
   (is (= {:errors [{:path [:tasks 'fmt :do 0]
-                    :msg "must contain exactly one of :sh, :run"}]}
+                    :msg "must contain exactly one of :sh, :run, :task"}]}
          (load-cfg {:tasks {'fmt {:do [{}]}}}))))
 
 (deftest load-rejects-step-with-unknown-key
   (is (= {:errors [{:path [:tasks 'fmt :do 0]
-                    :msg "unknown key :env (allowed: :sh, :run)"}]}
+                    :msg "unknown key :env (allowed: :sh, :run, :task)"}]}
          (load-cfg {:tasks {'fmt {:do [{:sh "echo hi"
                                         :env {"FOO" "1"}}]}}}))))
 
@@ -504,7 +504,7 @@
   (is (= {:errors [{:path [:vars :version]
                     :msg "must be a string or number, got [:x]"}
                    {:path [:tasks 'lint :do 0]
-                    :msg "unknown key :shh (allowed: :sh, :run)"}]}
+                    :msg "unknown key :shh (allowed: :sh, :run, :task)"}]}
          (load-cfg {:vars {:version [:x]}
                     :tasks {'lint {:do [{:shh "x"}]}}}))))
 
@@ -644,6 +644,99 @@
     (is (str/includes? (:msg (first (:errors r))) "dependency cycle"))
     (is (str/includes? (:msg (first (:errors r))) "a"))
     (is (str/includes? (:msg (first (:errors r))) "b"))))
+
+;; ---------------------------------------------------------------------------
+;; load-config: :task steps
+;; ---------------------------------------------------------------------------
+
+(def ^:private task-step-tasks
+  {'fmt {:do {:sh "echo fmt"}}
+   'dep {:args [{:name :env
+                 :type [:enum "prod" "staging"]}]
+         :do {:sh "echo dep"}}})
+
+(defn- load-ci [ci]
+  (load-cfg {:tasks (assoc task-step-tasks 'ci ci)}))
+
+(deftest load-accepts-task-steps
+  (is (contains? (load-ci {:args [{:name :env}]
+                           :do [{:task 'fmt}
+                                {:task ['dep :arg/env]}
+                                {:task ['dep "prod"]}]})
+                 :cfg))
+  (is (contains? (load-ci {:do {:task 'fmt}}) :cfg)))
+
+(deftest load-normalizes-single-task-step-map
+  (is (= [{:task 'fmt}]
+         (get-in (load-ci {:do {:task 'fmt}}) [:cfg :tasks 'ci :do]))))
+
+(deftest load-rejects-bad-task-step-value
+  (is (= {:errors [{:path [:tasks 'ci :do 0 :task]
+                    :msg "must be a task symbol or [task item...] vector, got \"fmt\""}]}
+         (load-ci {:do [{:task "fmt"}]})))
+  (is (= {:errors [{:path [:tasks 'ci :do 0 :task]
+                    :msg "must be a non-empty vector [task item...]"}]}
+         (load-ci {:do [{:task []}]})))
+  (is (= {:errors [{:path [:tasks 'ci :do 0 :task 0]
+                    :msg "first element must be a task symbol, got \"fmt\""}]}
+         (load-ci {:do [{:task ["fmt"]}]})))
+  (is (= {:errors [{:path [:tasks 'ci :do 0 :task 1]
+                    :msg "must be a string, :arg/<name>, or :var/<name>, got 5"}]}
+         (load-ci {:do [{:task ['dep 5]}]}))))
+
+(deftest load-rejects-task-step-with-another-action
+  (is (= {:errors [{:path [:tasks 'ci :do 0]
+                    :msg "must contain exactly one of :sh, :run, :task"}]}
+         (load-ci {:do [{:task 'fmt
+                         :sh "echo hi"}]}))))
+
+(deftest load-rejects-task-step-unknown-callee
+  (is (= {:errors [{:path [:tasks 'ci :do 0 :task]
+                    :msg "calls undefined task nope (defined: ci, dep, fmt)"}]}
+         (load-ci {:do [{:task 'nope}]})))
+  (is (= {:errors [{:path [:tasks 'ci :do :task]
+                    :msg "calls undefined task nope (defined: ci, dep, fmt)"}]}
+         (load-ci {:do {:task 'nope}}))))
+
+(deftest load-rejects-task-step-bad-forward
+  (is (= {:errors [{:path [:tasks 'ci :do 1 :task]
+                    :msg "forwards :arg/missing but task ci declares no args"}]}
+         (load-ci {:do [{:sh "echo hi"}
+                        {:task ['dep :arg/missing]}]})))
+  (is (= {:errors [{:path [:tasks 'ci :do 0 :task]
+                    :msg "references :var/v but no such var is defined"}]}
+         (load-ci {:do [{:task ['dep "{{var/v}}"]}]}))))
+
+(deftest load-rejects-task-step-literal-arg-mismatch
+  (is (= {:errors [{:path [:tasks 'ci :do 0 :task]
+                    :msg (str "calls dep: argument <env> must be one of: "
+                              "prod, staging, got \"dev\"")}]}
+         (load-ci {:do [{:task ['dep "dev"]}]})))
+  (is (= {:errors [{:path [:tasks 'ci :do 0 :task]
+                    :msg "calls dep: missing required argument <env>"}]}
+         (load-ci {:do [{:task 'dep}]}))))
+
+(deftest load-rejects-task-step-self-call
+  (is (= {:errors [{:path [:tasks 'a]
+                    :msg "dependency cycle: a -> a"}]}
+         (load-cfg {:tasks {'a {:do [{:task 'a}]}}}))))
+
+;; Each task both depends on and calls the next: parallel edges at every level.
+;; Without a done set the cycle check re-walks the chain 2^n times.
+(deftest load-checks-deep-parallel-edge-chain-quickly
+  (let [n 40
+        tname (fn [i] (symbol (str "t" i)))
+        tasks (into {(tname n) {:do {:sh "echo end"}}}
+                    (map (fn [i] [(tname i) {:depends [(tname (inc i))]
+                                             :do [{:task (tname (inc i))}]}])
+                         (range n)))]
+    (is (contains? (load-cfg {:tasks tasks}) :cfg))))
+
+(deftest load-rejects-mixed-depends-task-cycle
+  (let [r (load-cfg {:tasks {'a {:depends ['b]}
+                             'b {:do [{:sh "echo b"} {:task 'a}]}}})]
+    (is (= 1 (count (:errors r))))
+    (is (str/includes? (:msg (first (:errors r))) "dependency cycle"))))
 
 ;; ---------------------------------------------------------------------------
 ;; coords-at (transitive: a fetched dep's own deps, read from lgx.edn)

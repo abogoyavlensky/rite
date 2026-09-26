@@ -87,8 +87,9 @@ error. An empty `{}` is valid.
 
   deploy {:doc "Deploy a release"
           :args [{:name :env :type [:enum "prod" "staging"]}]
-          :depends [check [notify :arg/env]]
+          :depends [check]
           :do [{:sh ["./deploy.sh" :arg/env]}
+               {:task [notify :arg/env]}  ; run another task as a step
                {:sh "echo released {{var/version}}"}]}
 
   notify {:args [{:name :env}]
@@ -129,6 +130,8 @@ Each step has exactly one action key:
 - `{:sh "cljfmt fix"}` runs the command with `sh -c`.
 - `{:run ["scripts/notify.lg" "prod"]}` runs a let-go script (see
   [`:run` steps](#run-steps-the-embedded-runtime)).
+- `{:task fmt}` or `{:task [notify "prod"]}` runs another task (see
+  [`:task` steps](#task-steps)).
 
 A step value is a string or a vector. A vector `:sh` value joins its items with
 spaces after substitution; a vector `:run` value passes its items through as the
@@ -172,9 +175,9 @@ test {:env {"NO_COLOR" "1"}
       :do {:sh "npm test"}}
 ```
 
-Both keys apply to the task's own steps only, not to the tasks in its
-`:depends`. `--verbose` prints the resolved `:env`, and the `cd` that applies
-`:cwd`.
+Both keys apply to the task's own steps, not to the tasks in its `:depends`.
+A task called by a [`:task` step](#task-steps) inherits them. `--verbose`
+prints the resolved `:env` and the `cd` that applies `:cwd`.
 
 #### `:args`
 
@@ -217,6 +220,43 @@ At load time rite checks that every `:depends` entry names a defined task, that
 forwarded placeholders name a declared arg or defined var, that literal
 arguments match the dependency's `:args`, and that the task graph has no cycle.
 
+#### `:task` steps
+
+A `{:task ...}` step runs another task at that point in `:do`, between the
+steps around it. Its value has the same shape as a `:depends` entry: a task
+symbol, or a vector of the task symbol followed by its arguments.
+
+```edn
+ci {:args [{:name :env}]
+    :do [{:sh "docker compose up -d"}
+         {:task fmt}                    ; no arguments
+         {:task [notify :arg/env]}      ; with a forwarded arg
+         {:sh "docker compose down"}]}
+```
+
+The step behaves like running `rite <task> args` at that point, but inside the
+same rite process. The called task runs its own `:depends` first, then its
+steps, each with its usual header, and the step line reads
+`$ rite notify prod`. Unlike `:depends`, a call is never deduped: a task that
+both depends on `fmt` and calls `{:task fmt}` runs fmt twice. Use `:depends`
+for prerequisites that should run once. Use `:task` when the order among your
+own steps matters, for example a task that must run between a setup step and a
+cleanup step.
+
+A called task inherits the caller's `:env`, with its own `:env` layered on top.
+It runs from its own `:cwd` if it sets one, and otherwise from the caller's
+directory. The tasks in its `:depends` inherit the same way.
+
+If a step inside the call fails, rite prints the failing task's failure line,
+then the caller's (`=> Task ci failed: step 3 exited with 1`), and exits with
+the failing step's code.
+
+At load time rite checks a `:task` step the same way it checks a `:depends`
+entry: the task must be defined, forwarded placeholders must name a declared
+arg or defined var, and literal arguments must match the task's `:args`. The
+cycle check covers `:depends` and `:task` together, so a task can't call itself
+directly or through another task.
+
 #### `:deps` and `:paths`
 
 These set the basis for a task's `:run` steps and have no effect on `:sh` steps.
@@ -248,7 +288,7 @@ left untouched.
 
 `:private? true` hides a task from `rite --help`, `rite tasks`, and shell
 completion. The task still runs directly (`rite <name>`) and stays a valid
-`:depends` target, so it suits helper tasks that other tasks build on but that
+`:depends` and `:task` target, so it suits helper tasks that other tasks build on but that
 users rarely invoke by name. Omitting the key — or setting `:private? false` —
 leaves the task visible.
 
@@ -276,7 +316,8 @@ notify {:paths ["scripts"]
 ```
 
 Steps run from the directory where you invoked rite, or from the task's `:cwd`
-when it sets one, and `:sh` commands and `:run` script paths resolve against
+when it sets one (a task called by a `:task` step without its own `:cwd` runs
+from the caller's directory), and `:sh` commands and `:run` script paths resolve against
 that directory. `:deps` and `:paths` always resolve against the project root.
 
 **Limitation:** a bundled binary serves `io/resource` only from the archive
