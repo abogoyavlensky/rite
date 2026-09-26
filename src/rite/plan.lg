@@ -40,10 +40,13 @@
     [(first entry)
      (mapv (fn [item] (resolve-item item bindings)) (rest entry))]))
 
-(defn- bind-error-msg [name ref err]
+(defn- bind-error-msg
+  "`ref` says how the task was reached — \"required by x\" or \"called by
+   x\" — or is nil for the root."
+  [name ref err]
   (if (nil? ref)
     (str "task " name ": " err)
-    (str "task " name " (required by " ref "): " err)))
+    (str "task " name " (" ref "): " err)))
 
 (declare add-task)
 
@@ -64,7 +67,7 @@
                     (str "task " parent-name " depends on unknown task "
                          dep-name))
             (add-task a tasks-map vars dep-name dep-task dep-args
-                      parent-name)))))
+                      (str "required by " parent-name))))))
     acc
     depends))
 
@@ -89,7 +92,7 @@
                                    :seen #{}
                                    :errors []}
                                   tasks-map vars callee callee-task callee-args
-                                  caller-name)]
+                                  (str "called by " caller-name))]
                 (if (seq (:errors sub))
                   {:errors (:errors sub)}
                   (assoc-in acc [:calls i] {:name callee
@@ -101,8 +104,8 @@
 (defn- add-task
   "Post-order: add all of task's transitive deps, then task itself (with its
    :calls sub-plans). Skips a [name arg-strings] key already present (dedup).
-   `ref` names the task that required or called this one, for error messages
-   (nil for the root)."
+   `ref` says how this task was reached (\"required by x\" / \"called by
+   x\"), for error messages (nil for the root)."
   [acc tasks-map vars name task arg-strings ref]
   (let [key [name arg-strings]]
     (if (contains? (:seen acc) key)
@@ -115,8 +118,10 @@
           (let [bindings (args/task-bindings vars (:bindings r))
                 acc (add-deps acc tasks-map vars name bindings
                               (or (:depends task) []))
-                calls (build-calls tasks-map vars name bindings
-                                   (or (:do task) []))]
+                calls (if (seq (:errors acc))
+                        {:calls {}}
+                        (build-calls tasks-map vars name bindings
+                                     (or (:do task) [])))]
             (if (:errors calls)
               (update acc :errors into (:errors calls))
               (update acc :plan conj {:name name
@@ -126,7 +131,8 @@
 
 (defn build-plan
   "Flatten `root-name` (bound with `root-arg-strings`) and its :depends graph
-   into {:plan [{:name :task :bindings} ...]} (root last), or {:errors [...]}.
+   into {:plan [{:name :task :bindings :calls} ...]} (root last), or
+   {:errors [...]}.
    `tasks-map` is the normalized :tasks map; `vars` the project :vars."
   [tasks-map vars root-name root-arg-strings]
   (let [root-task (get tasks-map root-name)]

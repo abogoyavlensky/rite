@@ -721,6 +721,17 @@
                     :msg "dependency cycle: a -> a"}]}
          (load-cfg {:tasks {'a {:do [{:task 'a}]}}}))))
 
+;; Each task both depends on and calls the next: parallel edges at every level.
+;; Without a done set the cycle check re-walks the chain 2^n times.
+(deftest load-checks-deep-parallel-edge-chain-quickly
+  (let [n 40
+        tname (fn [i] (symbol (str "t" i)))
+        tasks (into {(tname n) {:do {:sh "echo end"}}}
+                    (map (fn [i] [(tname i) {:depends [(tname (inc i))]
+                                             :do [{:task (tname (inc i))}]}])
+                         (range n)))]
+    (is (contains? (load-cfg {:tasks tasks}) :cfg))))
+
 (deftest load-rejects-mixed-depends-task-cycle
   (let [r (load-cfg {:tasks {'a {:depends ['b]}
                              'b {:do [{:sh "echo b"} {:task 'a}]}}})]

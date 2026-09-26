@@ -208,3 +208,31 @@
     (is (contains? r :errors))
     (is (str/includes? (first (:errors r)) "must be one of: prod, staging"))
     (is (str/includes? (first (:errors r)) "deploy"))))
+
+(deftest task-step-error-says-called-by
+  (let [tasks {'deploy {:args [{:name :env
+                                :type [:enum "prod" "staging"]}]
+                        :do [{:sh "echo deploy"}]}
+               'ci {:args [{:name :env}]
+                    :do [{:task ['deploy :arg/env]}]}}
+        r (plan/build-plan tasks {} 'ci ["dev"])]
+    (is (str/includes? (first (:errors r)) "task deploy (called by ci): "))))
+
+(deftest depends-error-not-repeated-by-task-step
+  (let [tasks {'deploy {:args [{:name :env
+                                :type [:enum "prod" "staging"]}]
+                        :do [{:sh "echo deploy"}]}
+               'ci {:args [{:name :env}]
+                    :depends [['deploy :arg/env]]
+                    :do [{:task ['deploy :arg/env]}]}}
+        r (plan/build-plan tasks {} 'ci ["dev"])]
+    (is (= 1 (count (:errors r))))
+    (is (str/includes? (first (:errors r)) "(required by ci)"))))
+
+(deftest task-steps-to-same-callee-get-own-sub-plans
+  (let [tasks {'fmt {:args [{:name :mode}]
+                     :do [{:sh "echo fmt"}]}
+               'ci {:do [{:task ['fmt "check"]} {:task ['fmt "fix"]}]}}
+        calls (:calls (entry (plan/build-plan tasks {} 'ci []) 'ci))]
+    (is (= ["check"] (:args (get calls 0))))
+    (is (= ["fix"] (:args (get calls 1))))))

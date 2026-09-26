@@ -638,30 +638,44 @@
                     (task-steps task)))))
 
 (defn- dfs-cycle
-  "Depth-first search for a cycle reachable from `node`. Returns the cycle as a
-   vector of names (first repeated at the end), or nil."
-  [graph node path on-path]
-  (if (contains? on-path node)
-    (conj (vec (drop-while #(not= % node) path)) node)
+  "Depth-first search for a cycle reachable from `node`. Returns {:cycle c},
+   c the cycle as a vector of names (first repeated at the end), or {:done d}:
+   `done` grown by every node fully explored without finding one. Skipping
+   done nodes keeps the search linear — without it, parallel edges (a task
+   that both :depends on and calls another) and diamonds re-walk the same
+   subgraph exponentially often."
+  [graph node path on-path done]
+  (cond
+    (contains? on-path node)
+    {:cycle (conj (vec (drop-while #(not= % node) path)) node)}
+
+    (contains? done node)
+    {:done done}
+
+    :else
     (let [new-path (conj path node)
           new-on (conj on-path node)]
-      (loop [ds (get graph node [])]
+      (loop [ds (get graph node [])
+             done done]
         (if (empty? ds)
-          nil
-          (or (dfs-cycle graph (first ds) new-path new-on)
-              (recur (rest ds))))))))
+          {:done (conj done node)}
+          (let [r (dfs-cycle graph (first ds) new-path new-on done)]
+            (if (:cycle r)
+              r
+              (recur (rest ds) (:done r)))))))))
 
 (defn- depends-cycle-errors [cfg]
   (let [tasks (or (:tasks cfg) {})
         graph (into {} (map (fn [[k t]] [k (task-dep-names t)]) tasks))]
-    (loop [nodes (keys graph)]
+    (loop [nodes (keys graph)
+           done #{}]
       (if (empty? nodes)
         []
-        (let [c (dfs-cycle graph (first nodes) [] #{})]
-          (if c
+        (let [r (dfs-cycle graph (first nodes) [] #{} done)]
+          (if-let [c (:cycle r)]
             [{:path [:tasks (first c)]
               :msg (str "dependency cycle: " (str/join " -> " (map str c)))}]
-            (recur (rest nodes))))))))
+            (recur (rest nodes) (:done r))))))))
 
 (def ^:private rite-schema
   [:and
