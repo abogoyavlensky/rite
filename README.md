@@ -230,14 +230,14 @@ symbol, or a vector of the task symbol followed by its arguments.
 ci {:args [{:name :env}]
     :do [{:sh "docker compose up -d"}
          {:task fmt}                    ; no arguments
-         {:task [deploy :arg/env "x"]}  ; forwarded arg and a literal
+         {:task [notify :arg/env]}      ; with a forwarded arg
          {:sh "docker compose down"}]}
 ```
 
 The step behaves like running `rite <task> args` at that point, but inside the
 same rite process. The called task runs its own `:depends` first, then its
 steps, each with its usual header, and the step line reads
-`$ rite deploy prod x`. Unlike `:depends`, a call is never deduped: a task that
+`$ rite notify prod`. Unlike `:depends`, a call is never deduped: a task that
 both depends on `fmt` and calls `{:task fmt}` runs fmt twice. Use `:depends`
 for prerequisites that should run once. Use `:task` when the order among your
 own steps matters, for example a task that must run between a setup step and a
@@ -247,9 +247,9 @@ A called task inherits the caller's `:env`, with its own `:env` layered on top.
 It runs from its own `:cwd` if it sets one, and otherwise from the caller's
 directory. The tasks in its `:depends` inherit the same way.
 
-If the called task fails, rite prints its failure line, then the caller's
-(`=> Task ci failed: step 2 exited with 1`), and exits with the called task's
-code.
+If a step inside the call fails, rite prints the failing task's failure line,
+then the caller's (`=> Task ci failed: step 3 exited with 1`), and exits with
+the failing step's code.
 
 At load time rite checks a `:task` step the same way it checks a `:depends`
 entry: the task must be defined, forwarded placeholders must name a declared
@@ -288,7 +288,7 @@ left untouched.
 
 `:private? true` hides a task from `rite --help`, `rite tasks`, and shell
 completion. The task still runs directly (`rite <name>`) and stays a valid
-`:depends` target, so it suits helper tasks that other tasks build on but that
+`:depends` and `:task` target, so it suits helper tasks that other tasks build on but that
 users rarely invoke by name. Omitting the key — or setting `:private? false` —
 leaves the task visible.
 
@@ -316,7 +316,8 @@ notify {:paths ["scripts"]
 ```
 
 Steps run from the directory where you invoked rite, or from the task's `:cwd`
-when it sets one, and `:sh` commands and `:run` script paths resolve against
+when it sets one (a task called by a `:task` step without its own `:cwd` runs
+from the caller's directory), and `:sh` commands and `:run` script paths resolve against
 that directory. `:deps` and `:paths` always resolve against the project root.
 
 **Limitation:** a bundled binary serves `io/resource` only from the archive

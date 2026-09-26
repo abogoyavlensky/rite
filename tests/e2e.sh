@@ -625,6 +625,7 @@ cat > "$proj/rite.edn" <<'EOF'
          show     {:do {:sh "echo $FOO $(basename $PWD)"}}
          own      {:env {"FOO" "own"} :do {:sh "echo $FOO"}}
          inherit  {:env {"FOO" "outer"} :cwd "sub" :do [{:task show} {:task own}]}
+         noleak   {:do [{:task own} {:sh "echo after=[$FOO]"}]}
          pre      {:do {:sh "echo pre $FOO $(basename $PWD)"}}
          moved    {:cwd "other" :depends [pre] :do {:sh "echo moved $(basename $PWD)"}}
          inherit2 {:env {"FOO" "outer"} :cwd "sub" :do [{:task moved}]}
@@ -648,9 +649,14 @@ assert_not_contains "$out" "after" ":task failure: later steps skipped"
 set +e; err="$(cd "$proj" && RITE_HOME="$home" "$RITE" failing 2>&1 >/dev/null)"; set -e
 assert_contains "$err" "=> Task boom failed: step 1 exited with 4" ":task failure: called task's failure line"
 assert_contains "$err" "=> Task failing failed: step 1 exited with 4" ":task failure: caller's failure line"
+[[ "$err" == *"Task boom failed"*"Task failing failed"* ]] || fail ":task failure: called task's line should print before the caller's"
+pass ":task failure: called task's line prints first"
 out="$(cd "$proj" && RITE_HOME="$home" "$RITE" inherit 2>/dev/null)"
 assert_eq "$out" "outer sub
 own" ":task: inherits the caller's :env and :cwd, own :env wins"
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" noleak 2>/dev/null)"
+assert_eq "$out" "own
+after=[]" ":task: a called task's :env doesn't leak into the caller's later steps"
 out="$(cd "$proj" && RITE_HOME="$home" "$RITE" inherit2 2>/dev/null)"
 assert_eq "$out" "pre outer sub
 moved other" ":task: called task's :depends inherit; its own :cwd wins"

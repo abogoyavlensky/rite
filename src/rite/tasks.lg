@@ -9,7 +9,7 @@
 ;; Task execution over a plan
 ;;
 ;; run-plan! runs each entry of a plan/build-plan result in order. Each entry
-;; is {:name :task :bindings}: its :do steps run sequentially, and the first
+;; is {:name :task :bindings :calls}: its :do steps run sequentially, and the first
 ;; non-zero exit stops the whole run with that code, after a failure line
 ;; naming the task and the 1-based step. A :depends-only task (no :do) prints
 ;; its header and runs nothing.
