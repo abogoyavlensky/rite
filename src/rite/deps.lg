@@ -238,7 +238,7 @@
       (println "done"))))
 
 ;; ---------------------------------------------------------------------------
-;; install command: fetch every task's :deps up front
+;; `rite tasks --deps`: fetch every task's :deps up front
 ;; ---------------------------------------------------------------------------
 
 (defn install-all!
