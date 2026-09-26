@@ -608,5 +608,64 @@ assert_contains "$out" "is managed by rite and cannot be set" ":env managed key:
 rm -rf "$proj" "$home"
 
 # ---------------------------------------------------------------------------
+echo "==> Scenario 12: :task steps"
+proj="$(mktemp -d)"; home="$(mktemp -d)"
+mkdir -p "$proj/sub" "$proj/other"
+cat > "$proj/sub/show.lg" <<'EOF'
+(println "show.lg found:" (file-exists? "show.lg"))
+EOF
+cat > "$proj/rite.edn" <<'EOF'
+{:tasks {notify   {:args [{:name :env}] :do {:sh "echo notify-{{arg/env}}"}}
+         ci       {:args [{:name :env}]
+                   :do [{:sh "echo before"} {:task [notify :arg/env]} {:sh "echo after"}]}
+         a        {:do {:sh "echo mark-a"}}
+         twice    {:depends [a] :do [{:task a}]}
+         boom     {:do [{:sh "exit 4"}]}
+         failing  {:do [{:task boom} {:sh "echo after"}]}
+         show     {:do {:sh "echo $FOO $(basename $PWD)"}}
+         own      {:env {"FOO" "own"} :do {:sh "echo $FOO"}}
+         inherit  {:env {"FOO" "outer"} :cwd "sub" :do [{:task show} {:task own}]}
+         pre      {:do {:sh "echo pre $FOO $(basename $PWD)"}}
+         moved    {:cwd "other" :depends [pre] :do {:sh "echo moved $(basename $PWD)"}}
+         inherit2 {:env {"FOO" "outer"} :cwd "sub" :do [{:task moved}]}
+         showrun  {:do [{:run ["show.lg"]}]}
+         callrun  {:env {"PATH" "/usr/bin:/bin"} :cwd "sub" :do [{:task showrun}]}}}
+EOF
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" ci prod 2>/dev/null)"
+assert_eq "$out" "before
+notify-prod
+after" ":task: runs in step order with forwarded args"
+err="$(cd "$proj" && RITE_HOME="$home" "$RITE" ci prod 2>&1 >/dev/null)"
+assert_contains "$err" "$ rite notify prod" ":task: step line shows the call"
+assert_contains "$err" "=> Running task notify..." ":task: called task prints its header"
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" twice 2>/dev/null)"
+assert_eq "$out" "mark-a
+mark-a" ":task: not deduped against :depends"
+set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" failing 2>/dev/null)"; rc=$?; set -e
+[[ $rc -eq 4 ]] || fail ":task failure: expected exit 4 (got $rc)"
+pass ":task failure: propagates the called task's exit code"
+assert_not_contains "$out" "after" ":task failure: later steps skipped"
+set +e; err="$(cd "$proj" && RITE_HOME="$home" "$RITE" failing 2>&1 >/dev/null)"; set -e
+assert_contains "$err" "=> Task boom failed: step 1 exited with 4" ":task failure: called task's failure line"
+assert_contains "$err" "=> Task failing failed: step 1 exited with 4" ":task failure: caller's failure line"
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" inherit 2>/dev/null)"
+assert_eq "$out" "outer sub
+own" ":task: inherits the caller's :env and :cwd, own :env wins"
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" inherit2 2>/dev/null)"
+assert_eq "$out" "pre outer sub
+moved other" ":task: called task's :depends inherit; its own :cwd wins"
+# rite on PATH by bare name, caller :env replacing PATH: the called task's :run
+# re-exec must still find this rite.
+set +e; out="$(cd "$proj" && PATH="$(dirname "$RITE"):$PATH" RITE_HOME="$home" rite callrun 2>/dev/null)"; set -e
+assert_eq "$out" "show.lg found: true" ":task: inherited PATH doesn't affect a nested :run's re-exec"
+cat > "$proj/rite.edn" <<'EOF'
+{:tasks {a {:do [{:task b}]} b {:depends [a]}}}
+EOF
+set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" a 2>&1)"; rc=$?; set -e
+[[ $rc -eq 1 ]] || fail ":task cycle: expected exit 1 (got $rc)"
+assert_contains "$out" "dependency cycle" ":task cycle: load-time error"
+rm -rf "$proj" "$home"
+
+# ---------------------------------------------------------------------------
 echo
 echo "All e2e scenarios passed ($PASS_COUNT assertions)."
