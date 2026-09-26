@@ -241,8 +241,8 @@ rite prints a warning.
 
 rite fetches a task's `:deps` lazily, on the first `:run` step that needs them.
 To fetch every task's `:deps` up front — for editor navigation, CI, or offline
-work — run `rite install`. It is idempotent: deps already in the cache are left
-untouched.
+work — run `rite tasks --deps`. It is idempotent: deps already in the cache are
+left untouched.
 
 #### `:private?`
 
@@ -290,7 +290,7 @@ rite                     # usage and task list
 rite -h | --help         # show this help
 rite -v | --version      # print the version
 rite tasks               # just the task list
-rite install             # fetch every task's :deps into the cache
+rite tasks --deps        # fetch every task's :deps into the cache
 rite <task> [args...]    # run a task
 rite --verbose <task>    # also print the resolved :run invocation and env
 rite completion <shell>  # print a bash/zsh/fish completion script

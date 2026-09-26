@@ -234,8 +234,14 @@
     (is (= {:errors [{:path [:tasks (symbol n)]
                       :msg (str "conflicts with built-in command \"" n "\"")}]}
            (load-cfg {:tasks {(symbol n) {:do [{:sh "echo hi"}]}}}))))
-  (is (= #{"tasks" "completion" "__complete" "install"}
+  (is (= #{"tasks" "completion" "__complete"}
          config/reserved-task-names)))
+
+(deftest load-accepts-install-task-name
+  ;; install is no longer a built-in (fetching deps is `rite tasks --deps`),
+  ;; so a project may define its own install task.
+  (let [cfg {:tasks {'install {:do [{:sh "echo hi"}]}}}]
+    (is (= {:cfg cfg} (load-cfg cfg)))))
 
 ;; ---------------------------------------------------------------------------
 ;; load-config: :do and step errors

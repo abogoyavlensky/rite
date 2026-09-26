@@ -24,7 +24,7 @@
 (defn- cmd-version! []
   (println (str "rite " (version))))
 
-(defn- cmd-tasks! []
+(defn- cmd-list-tasks! []
   (let [project (config/find-project!)
         cfg (config/load-config! project)
         t (config/visible-tasks cfg)]
@@ -32,7 +32,7 @@
       (println "no tasks defined in rite.edn")
       (println (help/task-rows t)))))
 
-(defn- cmd-install! []
+(defn- cmd-fetch-deps! []
   ;; Fetch every task's :deps into the gitlibs cache up front. A git-fetch
   ;; failure throws from rite.deps; catch it for a clean one-line error rather
   ;; than a stack trace. (An invalid dep lgx.edn is already handled inside
@@ -43,8 +43,19 @@
     (try
       (deps/print-install-report! (deps/install-all! project t))
       (catch e
-             (do (write! *err* (str "rite: install: " (ex-message e) "\n"))
+             (do (write! *err* (str "rite: tasks --deps: " (ex-message e) "\n"))
                  (os/exit 1))))))
+
+(defn- cmd-tasks! [rest-args]
+  ;; Parse before touching the project, so a bad argument is reported as such
+  ;; even outside a project.
+  (let [parsed (cli/parse-tasks-args rest-args)]
+    (case (:mode parsed)
+      :list (cmd-list-tasks!)
+      :deps (cmd-fetch-deps!)
+      (do (write! *err* (str "rite: tasks: " (:error parsed)
+                             ". See 'rite --help'.\n"))
+          (os/exit 1)))))
 
 (defn- unknown-task! [cmd]
   (write! *err* (str "rite: '" cmd "' is not a task. See 'rite --help'.\n"))
@@ -86,8 +97,7 @@
     "--help" (print-usage!)
     "-v" (cmd-version!)
     "--version" (cmd-version!)
-    "tasks" (cmd-tasks!)
-    "install" (cmd-install!)
+    "tasks" (cmd-tasks! rest-args)
     ;; Hidden shell-completion entry points (see rite.completion). Kept out of
     ;; help and out of TAB candidates; reserved in config/reserved-task-names.
     "completion" (completion/cmd-completion! rest-args)

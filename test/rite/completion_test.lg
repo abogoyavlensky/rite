@@ -22,13 +22,12 @@
 ;; ---------------------------------------------------------------------------
 
 (deftest command-position-lists-builtins-and-tasks-sorted
-  ;; Sorted: "fmt" precedes "foo/bar" (m < o); "install"/"tasks" built-ins
-  ;; included.
-  (is (= ["fmt" "foo/bar" "install" "lint" "tasks"]
+  ;; Sorted: "fmt" precedes "foo/bar" (m < o); the "tasks" built-in included.
+  (is (= ["fmt" "foo/bar" "lint" "tasks"]
          (completion/candidates [] "" sample-tasks))))
 
 (deftest command-position-no-tasks-lists-builtin-only
-  (is (= ["install" "tasks"] (completion/candidates [] "" {}))))
+  (is (= ["tasks"] (completion/candidates [] "" {}))))
 
 (deftest command-position-prefix-filters
   (is (= ["fmt"] (completion/candidates [] "fm" sample-tasks)))
@@ -43,9 +42,8 @@
   ;; line on TAB; it still runs when typed by hand.
   (let [tasks {"safe" nil
                "a$b" nil}]
-    ;; "install"/"tasks" built-ins are always present; the unsafe name is
-    ;; dropped.
-    (is (= ["install" "safe" "tasks"] (completion/candidates [] "" tasks)))
+    ;; The "tasks" built-in is always present; the unsafe name is dropped.
+    (is (= ["safe" "tasks"] (completion/candidates [] "" tasks)))
     (is (= [] (completion/candidates [] "a" tasks)))))
 
 (deftest hidden-commands-never-offered
