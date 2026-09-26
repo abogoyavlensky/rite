@@ -438,7 +438,7 @@ rm -rf "$nop"
 bad="$(mktemp -d)"; echo '{:tasks {bad {}}}' > "$bad/rite.edn"
 set +e; out="$(cd "$bad" && RITE_HOME="$home" "$RITE" __complete "" 2>/dev/null)"; rc=$?; set -e
 [[ $rc -eq 0 ]] || fail "completion invalid-config: expected exit 0 (got $rc)"
-assert_eq "$out" $'install\ntasks' "completion invalid-config: only built-ins, no leaked task"
+assert_eq "$out" "tasks" "completion invalid-config: only built-ins, no leaked task"
 rm -rf "$bad"
 
 # `completion <shell>` prints a script; unknown shell exits 1.
@@ -454,7 +454,7 @@ assert_not_contains "$out" "completion" "completion: hidden from help"
 rm -rf "$proj" "$home"
 
 # ---------------------------------------------------------------------------
-echo "==> Scenario 10: rite install fetches every task's :deps"
+echo "==> Scenario 10: rite tasks --deps fetches every task's :deps"
 if command -v git >/dev/null 2>&1; then
     home="$(mktemp -d)"
     bare="$home/_fixtures/greet.git"
@@ -470,32 +470,32 @@ if command -v git >/dev/null 2>&1; then
   noop {:do [{:sh "echo noop"}]}}}
 EOF
     # First run fetches the single dep and reports it.
-    out="$(cd "$proj" && RITE_HOME="$home" "$RITE" install 2>&1)"
-    assert_contains "$out" "installing 1 dep(s)..." "install: first run installs the dep"
-    assert_contains "$out" "done: 1 installed" "install: first run reports installed"
+    out="$(cd "$proj" && RITE_HOME="$home" "$RITE" tasks --deps 2>&1)"
+    assert_contains "$out" "installing 1 dep(s)..." "tasks --deps: first run installs the dep"
+    assert_contains "$out" "done: 1 installed" "tasks --deps: first run reports installed"
     [[ -d "$home/gitlibs/_local/_/greet/$sha" ]] \
-        || fail "install: dep not fetched at \$RITE_HOME/gitlibs/_local/_/greet/$sha"
-    pass "install: dep fetched into \$RITE_HOME/gitlibs"
+        || fail "tasks --deps: dep not fetched at \$RITE_HOME/gitlibs/_local/_/greet/$sha"
+    pass "tasks --deps: dep fetched into \$RITE_HOME/gitlibs"
     # Second run is idempotent: nothing clones, everything is cached.
-    out="$(cd "$proj" && RITE_HOME="$home" "$RITE" install 2>&1)"
-    assert_contains "$out" "already cached" "install: second run reports cached"
-    assert_not_contains "$out" "installing" "install: second run clones nothing"
-    # install is offered at the command position.
+    out="$(cd "$proj" && RITE_HOME="$home" "$RITE" tasks --deps 2>&1)"
+    assert_contains "$out" "already cached" "tasks --deps: second run reports cached"
+    assert_not_contains "$out" "installing" "tasks --deps: second run clones nothing"
+    # install is no longer a built-in, so completion doesn't offer it.
     out="$(cd "$proj" && RITE_HOME="$home" "$RITE" __complete "")"
-    assert_contains "$out" "install" "install: completion offers install"
+    assert_not_contains "$out" "install" "tasks --deps: completion does not offer install"
     rm -rf "$proj" "$home"
 else
-    skip "install scenario requires git"
+    skip "tasks --deps scenario requires git"
 fi
 
-# A project with no :deps anywhere: nothing to install, exit 0 (no git needed).
+# A project with no :deps anywhere: nothing to fetch, exit 0 (no git needed).
 nodeps="$(mktemp -d)"; ndhome="$(mktemp -d)"
 cat > "$nodeps/rite.edn" <<'EOF'
 {:tasks {build {:do [{:sh "echo build"}]}}}
 EOF
-set +e; out="$(cd "$nodeps" && RITE_HOME="$ndhome" "$RITE" install 2>&1)"; rc=$?; set -e
-[[ $rc -eq 0 ]] || fail "install no-deps: expected exit 0 (got $rc)"
-assert_contains "$out" "nothing to fetch: no task declares :deps" "install no-deps: message"
+set +e; out="$(cd "$nodeps" && RITE_HOME="$ndhome" "$RITE" tasks --deps 2>&1)"; rc=$?; set -e
+[[ $rc -eq 0 ]] || fail "tasks --deps no-deps: expected exit 0 (got $rc)"
+assert_contains "$out" "nothing to fetch: no task declares :deps" "tasks --deps no-deps: message"
 rm -rf "$nodeps" "$ndhome"
 
 # A fetch failure (dep points at a repo that was never created) exits 1 with a
@@ -508,13 +508,35 @@ if command -v git >/dev/null 2>&1; then
                             :git/sha "0000000000000000000000000000000000000000"}}
           :do [{:sh "echo hi"}]}}}
 EOF
-    set +e; out="$(cd "$failproj" && RITE_HOME="$failhome" "$RITE" install 2>&1)"; rc=$?; set -e
-    assert_eq "$rc" "1" "install fetch-failure: exit 1"
-    assert_contains "$out" "rite: install:" "install fetch-failure: clean error"
+    set +e; out="$(cd "$failproj" && RITE_HOME="$failhome" "$RITE" tasks --deps 2>&1)"; rc=$?; set -e
+    assert_eq "$rc" "1" "tasks --deps fetch-failure: exit 1"
+    assert_contains "$out" "rite: tasks --deps:" "tasks --deps fetch-failure: clean error"
     rm -rf "$failproj" "$failhome"
 else
-    skip "install fetch-failure scenario requires git"
+    skip "tasks --deps fetch-failure scenario requires git"
 fi
+
+# install is free as a task name: a user install task runs via `rite install`.
+proj="$(mktemp -d)"; home="$(mktemp -d)"
+echo '{:tasks {install {:do [{:sh "echo user-install"}]}}}' > "$proj/rite.edn"
+set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" install 2>&1)"; rc=$?; set -e
+[[ $rc -eq 0 ]] || fail "user install task: expected exit 0 (got $rc)"
+assert_contains "$out" "user-install" "user install task: runs"
+# Without such a task, `rite install` is just an unknown task.
+echo '{:tasks {build {:do [{:sh "echo build"}]}}}' > "$proj/rite.edn"
+set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" install 2>&1)"; rc=$?; set -e
+[[ $rc -eq 1 ]] || fail "install without task: expected exit 1 (got $rc)"
+assert_contains "$out" "is not a task" "install without task: unknown-task error"
+# `rite tasks` rejects unknown arguments, inside a project...
+set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" tasks bogus 2>&1)"; rc=$?; set -e
+[[ $rc -eq 1 ]] || fail "tasks bogus: expected exit 1 (got $rc)"
+assert_contains "$out" "unknown argument 'bogus'" "tasks bogus: unknown argument reported"
+# ...and outside one, before looking for rite.edn.
+nop="$(mktemp -d)"
+set +e; out="$(cd "$nop" && RITE_HOME="$home" "$RITE" tasks bogus 2>&1)"; rc=$?; set -e
+[[ $rc -eq 1 ]] || fail "tasks bogus no-project: expected exit 1 (got $rc)"
+assert_contains "$out" "unknown argument 'bogus'" "tasks bogus no-project: arguments checked first"
+rm -rf "$proj" "$home" "$nop"
 
 # ---------------------------------------------------------------------------
 echo "==> Scenario 11: task :env and :cwd"
