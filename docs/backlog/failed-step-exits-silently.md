@@ -1,6 +1,8 @@
 # A failing step ends the run with no message naming the task or step
 
-**Status: open**
+**Status: done**
+Plan: docs/plans/2026-09-25-2226-backlog-sweep.md
+Landed in: `src/rite/tasks.lg` (`run-entry!`) and `src/rite/style.lg` (`failure-line`), Part C of the plan above.
 
 ## Problem
 

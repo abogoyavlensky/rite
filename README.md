@@ -107,8 +107,8 @@ any step string or as `:var/name` in a step vector.
 ### Tasks
 
 Each task is a map. The keys are `:doc`, `:args`, `:do`, `:depends`, `:deps`,
-`:paths`, and `:private?`; any other key is an error. A task needs at least a
-`:do` or a `:depends`.
+`:paths`, `:private?`, `:env`, and `:cwd`; any other key is an error. A task
+needs at least a `:do` or a `:depends`.
 
 Task names are symbols (`fmt`, not `:fmt`). These names are reserved and cannot
 be task names: `tasks` (the built-in command), plus `completion` and
@@ -119,8 +119,10 @@ free to use as task names.
 #### `:do` steps
 
 `:do` is one step map or a vector of step maps. Steps run top to bottom. The
-first step to exit non-zero stops the task and becomes its exit code. Output
-streams live, so progress bars and interactive prompts work.
+first step to exit non-zero stops the task and becomes its exit code. rite then
+prints `=> Task <name> failed: step <n> exited with <code>` to stderr, so a quiet
+failure in a long `:depends` chain still says where it stopped. Output streams
+live, so progress bars and interactive prompts work.
 
 Each step has exactly one action key:
 
@@ -150,6 +152,29 @@ template tools is safe inside step strings.
 rite validates both placeholder forms when it loads the config: an `arg/*`
 placeholder must name a declared arg, a `var/*` placeholder must name a
 defined var.
+
+#### `:env` and `:cwd`
+
+`:env` sets environment variables for every step of the task. It is a map of
+variable names (strings) to string or number values, and the values take the
+same `{{arg/*}}` and `{{var/*}}` tokens as step strings. rite sets the variables
+around each step and restores the previous values afterwards; a variable that
+was unset comes back empty, since let-go cannot unset one. `RITE_SCRIPT`,
+`LG_SOURCE_PATHS`, and `LG_READ_CLJ` are managed by rite and are rejected.
+
+`:cwd` is a directory relative to the project root. Every step of the task runs
+from it, wherever you invoke rite, and a `:run` script path resolves against
+it. A missing directory fails the first step.
+
+```edn
+test {:env {"NO_COLOR" "1"}
+      :cwd "packages/cli"
+      :do {:sh "npm test"}}
+```
+
+Both keys apply to the task's own steps only, not to the tasks in its
+`:depends`. `--verbose` prints the resolved `:env`, and the `cd` that applies
+`:cwd`.
 
 #### `:args`
 
@@ -250,9 +275,9 @@ notify {:paths ["scripts"]
 (cli/send (str "deploying to " (first *command-line-args*)))
 ```
 
-Steps run from the directory where you invoked rite, so `:sh` commands and
-`:run` script paths resolve against your working directory, while `:deps` and
-`:paths` resolve against the project root.
+Steps run from the directory where you invoked rite, or from the task's `:cwd`
+when it sets one, and `:sh` commands and `:run` script paths resolve against
+that directory. `:deps` and `:paths` always resolve against the project root.
 
 **Limitation:** a bundled binary serves `io/resource` only from the archive
 embedded at build time, so rite has no `:resource-paths` and `io/resource` is
@@ -276,7 +301,8 @@ rite completion <shell>  # print a bash/zsh/fish completion script
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `RITE_HOME` | `$XDG_CACHE_HOME/rite`, else `~/.cache/rite` | State root for the dependency cache. The layout matches lgx's, so set `RITE_HOME=~/.lgx` to reuse lgx's cache. A relative `XDG_CACHE_HOME` is ignored, per the XDG spec. |
-| `RITE_NO_COLOR` | unset | Set to any non-empty value to disable colored headers and step markers. |
+| `RITE_NO_COLOR` | unset | Set to any non-empty value to disable colored headers and step markers. Color is also off when stderr is not a terminal, so piped and CI output stays plain. |
+| `NO_COLOR` | unset | The standard [opt-out](https://no-color.org); same effect as `RITE_NO_COLOR`. |
 
 ## Development
 

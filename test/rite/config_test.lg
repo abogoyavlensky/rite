@@ -224,7 +224,8 @@
 (deftest load-rejects-task-with-unknown-key
   (is (= {:errors [{:path [:tasks 'dev]
                     :msg (str "unknown key :extra-deps (allowed: :doc, :args, "
-                              ":do, :depends, :deps, :paths, :private?)")}]}
+                              ":do, :depends, :deps, :paths, :private?, :env, "
+                              ":cwd)")}]}
          (load-cfg {:tasks {'dev {:extra-deps {}
                                   :do [{:sh "echo hi"}]}}}))))
 
@@ -704,3 +705,79 @@
       (is (str/includes? (:msg r) (str "invalid lgx.edn in " dir " (1 error)")))
       (is (str/includes? (:msg r) "must specify :git/sha or :git/tag")))
     (os/sh "rm" "-rf" dir)))
+
+;; ---------------------------------------------------------------------------
+;; load-config: task :env and :cwd
+;; ---------------------------------------------------------------------------
+
+(deftest load-accepts-env-and-cwd
+  ;; :env number values are stringified, like :vars.
+  (let [r (load-cfg {:tasks {'t {:env {"FOO" "bar"
+                                       "N" 3}
+                                 :cwd "packages/cli"
+                                 :do [{:sh "echo hi"}]}}})]
+    (is (= {"FOO" "bar"
+            "N" "3"} (get-in r [:cfg :tasks 't :env])))
+    (is (= "packages/cli" (get-in r [:cfg :tasks 't :cwd])))))
+
+(deftest load-accepts-env-value-with-known-placeholders
+  (let [cfg {:vars {:level "debug"}
+             :tasks {'t {:args [{:name :who}]
+                         :env {"GREETING" "hi {{arg/who}} {{var/level}}"}
+                         :do [{:sh "echo hi"}]}}}]
+    (is (= {:cfg cfg} (load-cfg cfg)))))
+
+(deftest load-rejects-env-not-a-map
+  (is (= {:errors [{:path [:tasks 't :env]
+                    :msg "must be a map, got [\"FOO\"]"}]}
+         (load-cfg {:tasks {'t {:env ["FOO"]
+                                :do [{:sh "echo hi"}]}}}))))
+
+(deftest load-rejects-env-non-string-key
+  (is (= {:errors [{:path [:tasks 't :env :FOO]
+                    :msg "must be a string, got :FOO"}]}
+         (load-cfg {:tasks {'t {:env {:FOO "x"}
+                                :do [{:sh "echo hi"}]}}}))))
+
+(deftest load-rejects-env-blank-or-equals-key
+  (is (= {:errors [{:path [:tasks 't :env ""]
+                    :msg "must be non-blank"}]}
+         (load-cfg {:tasks {'t {:env {"" "x"}
+                                :do [{:sh "echo hi"}]}}})))
+  (is (= {:errors [{:path [:tasks 't :env "A=B"]
+                    :msg "must not contain ="}]}
+         (load-cfg {:tasks {'t {:env {"A=B" "x"}
+                                :do [{:sh "echo hi"}]}}}))))
+
+(deftest load-rejects-env-managed-key
+  (doseq [k config/managed-env-names]
+    (is (= {:errors [{:path [:tasks 't :env k]
+                      :msg "is managed by rite and cannot be set"}]}
+           (load-cfg {:tasks {'t {:env {k "1"}
+                                  :do [{:sh "echo hi"}]}}})))))
+
+(deftest load-rejects-env-non-scalar-value
+  (is (= {:errors [{:path [:tasks 't :env "FOO"]
+                    :msg "must be a string or number, got [1]"}]}
+         (load-cfg {:tasks {'t {:env {"FOO" [1]}
+                                :do [{:sh "echo hi"}]}}}))))
+
+(deftest load-rejects-env-value-unknown-placeholder
+  (is (= {:errors [{:path [:tasks 't :env "FOO"]
+                    :msg "placeholder :arg/nope used but no :args declared"}]}
+         (load-cfg {:tasks {'t {:env {"FOO" "{{arg/nope}}"}
+                                :do [{:sh "echo hi"}]}}}))))
+
+(deftest load-rejects-bad-cwd
+  (is (= {:errors [{:path [:tasks 't :cwd]
+                    :msg "must be relative (no leading /)"}]}
+         (load-cfg {:tasks {'t {:cwd "/abs"
+                                :do [{:sh "echo hi"}]}}})))
+  (is (= {:errors [{:path [:tasks 't :cwd]
+                    :msg "must not contain .. segments"}]}
+         (load-cfg {:tasks {'t {:cwd "a/../b"
+                                :do [{:sh "echo hi"}]}}})))
+  (is (= {:errors [{:path [:tasks 't :cwd]
+                    :msg "must be a string, got 5"}]}
+         (load-cfg {:tasks {'t {:cwd 5
+                                :do [{:sh "echo hi"}]}}}))))

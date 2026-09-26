@@ -1,6 +1,8 @@
 # `rite install` reads as toolchain setup but only fetches `:deps`
 
-**Status: open**
+**Status: done**
+Plan: docs/plans/2026-09-25-2226-backlog-sweep.md
+Landed in: `src/rite/help.lg` (help row) and `src/rite/deps.lg` (no-deps message), Part A of the plan above.
 
 ## Problem
 

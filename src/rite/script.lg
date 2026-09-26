@@ -94,6 +94,39 @@
   [exe argv]
   (str "+ " exe " " (str/join " " argv) "\n"))
 
+(defn cwd-argv
+  "The argv that runs `exe argv...` from directory `cwd` without changing
+   rite's own working directory: `sh -c` gets the cwd as $1, `shift` drops it,
+   and `exec` replaces the shell so the child's exit code and signals pass
+   straight through."
+  [cwd exe argv]
+  (vec (concat ["sh" "-c" "cd \"$1\" && shift && exec \"$@\"" "sh" cwd exe]
+               argv)))
+
+(defn absolute-exe
+  "`exe` made absolute against `cwd` when it is a relative path containing a
+   `/` (./bin/rite in development), so it still resolves after a cd. An
+   absolute path or a bare name (found via PATH) is returned unchanged."
+  [exe cwd]
+  (if (and (str/includes? exe "/") (not (path/absolute? exe)))
+    (path/join cwd exe)
+    exe))
+
+(defn resolve-exe
+  "rite's own executable as an absolute path when it can be found, so a
+   task's :env (PATH in particular) cannot change which binary a :run step
+   re-execs. A path with a `/` goes through absolute-exe. A bare name goes
+   through `lookup` (name -> path or nil; shell-lookup in production), whose
+   result is made absolute against `cwd`. An unfound name, or a lookup result
+   with no `/` (a shell builtin or function), returns `exe` unchanged."
+  [exe cwd lookup]
+  (if (str/includes? exe "/")
+    (absolute-exe exe cwd)
+    (let [found (lookup exe)]
+      (if (and (string? found) (str/includes? found "/"))
+        (absolute-exe found cwd)
+        exe))))
+
 ;; ---------------------------------------------------------------------------
 ;; Child side: run in-process when RITE_SCRIPT is set
 ;; ---------------------------------------------------------------------------
@@ -125,6 +158,18 @@
 ;; Parent side: resolve basis, set env, re-exec rite as the script child
 ;; ---------------------------------------------------------------------------
 
+(defn shell-lookup
+  "Find executable `name` on PATH the way the shell does, via `command -v`:
+   directories and files without the executable bit are skipped (os/stat has
+   no mode field, so let-go cannot check that itself). Returns the path, or
+   nil when not found. Reads the current process PATH, so call it before a
+   task's :env is applied."
+  [name]
+  (let [r (os/sh "sh" "-c" "command -v -- \"$1\"" "sh" name)]
+    (when (zero? (:exit r))
+      (let [out (str/trim (:out r))]
+        (when-not (str/blank? out) out)))))
+
 (defn resolve-basis!
   "Resolve a task's :run basis once per task: fetch its :deps transitively
    (printing any installs) and compute the LG_SOURCE_PATHS value from the
@@ -141,22 +186,26 @@
 
 (defn exec-script!
   "Run one :run step's `argv` as the script child under `sp-value`: set
-   RITE_SCRIPT / LG_SOURCE_PATHS / LG_READ_CLJ, re-exec `(first os/args)` with
-   `argv` (streaming stdio), then restore the three env vars so a later :sh
-   step doesn't inherit them. Returns the child's exit code. `argv` is the
-   child-argv (argv[0] = the script)."
-  [sp-value argv verbose?]
-  (let [exe (first os/args)
+   RITE_SCRIPT / LG_SOURCE_PATHS / LG_READ_CLJ, re-exec rite (`exe`, from
+   resolve-exe) with `argv` (streaming stdio), then restore the three env vars
+   so a later :sh step doesn't inherit them. Returns the child's exit code.
+   `argv` is the child-argv (argv[0] = the script). When `cwd` is non-nil the
+   child runs from that directory via cwd-argv; rite's own directory is
+   unchanged."
+  [exe sp-value argv verbose? cwd]
+  (let [full (if cwd
+               (cwd-argv cwd exe argv)
+               (vec (cons exe argv)))
         prev-script (os/getenv "RITE_SCRIPT")
         prev-sp (os/getenv "LG_SOURCE_PATHS")
         prev-clj (os/getenv "LG_READ_CLJ")]
     (when verbose?
       (write! *err* (env-trace-line sp-value))
-      (write! *err* (exec-trace-line exe argv)))
+      (write! *err* (exec-trace-line (first full) (rest full))))
     (os/setenv "RITE_SCRIPT" "1")
     (os/setenv "LG_SOURCE_PATHS" sp-value)
     (os/setenv "LG_READ_CLJ" "1")
-    (let [exit (apply os/exec* exe argv)]
+    (let [exit (apply os/exec* full)]
       (os/setenv "RITE_SCRIPT" (or prev-script ""))
       ;; let-go has no unsetenv, and lg treats LG_SOURCE_PATHS="" as "search
       ;; nothing" (not "unset") — restoring blank would disable the default `.`

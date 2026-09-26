@@ -1,6 +1,8 @@
 # Tasks cannot set environment variables or a working directory for their steps
 
-**Status: open**
+**Status: done**
+Plan: docs/plans/2026-09-25-2226-backlog-sweep.md
+Landed in: `src/rite/config.lg` (schema), `src/rite/tasks.lg` and `src/rite/script.lg` (execution), Part D of the plan above. `:cwd` runs each step through `sh` with a `cd` instead of `syscall/chdir`, so it works for `:sh` and `:run` steps on every platform.
 
 ## Problem
 

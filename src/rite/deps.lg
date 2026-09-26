@@ -285,7 +285,7 @@
   "Summarize install-all! `results` as a vector of output lines. Dedupes by
    :path first (a coord shared across tasks appears once). Over `total` deduped
    deps and `n` newly installed:
-     total 0       -> [\"no dependencies to install\"]
+     total 0       -> [\"nothing to fetch: no task declares :deps\"]
      n 0 (cached)  -> [\"all N dep(s) already cached\"]
      otherwise     -> a header, one line per newly installed dep, then a done
                       summary."
@@ -295,7 +295,7 @@
         installed (filter :installed? deduped)
         n (count installed)]
     (cond
-      (zero? total) ["no dependencies to install"]
+      (zero? total) ["nothing to fetch: no task declares :deps"]
       (zero? n) [(str "all " total " dep(s) already cached")]
       :else
       (vec (concat

@@ -178,6 +178,8 @@ set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" fail 2>/dev/null)"; rc=$?
 pass ":sh fail: propagates exit code 7"
 assert_contains "$out" "before" ":sh fail: first step ran"
 assert_not_contains "$out" "after" ":sh fail: later step skipped"
+set +e; err="$(cd "$proj" && RITE_HOME="$home" "$RITE" fail 2>&1 >/dev/null)"; set -e
+assert_contains "$err" "=> Task fail failed: step 2 exited with 7" ":sh fail: failure line names task and step"
 rm -rf "$proj" "$home"
 
 # ---------------------------------------------------------------------------
@@ -267,6 +269,9 @@ set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" top 2>/dev/null)"; rc=$?;
 pass ":depends failure: propagates dep's exit code 5"
 assert_contains "$out" "boom-ran" ":depends failure: dep step ran"
 assert_not_contains "$out" "top-ran" ":depends failure: dependent skipped"
+set +e; err="$(cd "$proj" && RITE_HOME="$home" "$RITE" top 2>&1 >/dev/null)"; set -e
+assert_contains "$err" "=> Task boom failed: step 2 exited with 5" ":depends failure: failure line names the failing dep"
+assert_not_contains "$err" "Task top failed" ":depends failure: no failure line for the skipped dependent"
 rm -rf "$proj" "$home"
 
 proj="$(mktemp -d)"; home="$(mktemp -d)"
@@ -304,7 +309,12 @@ EOF
        :paths ["scripts"]
        :deps {test/greet {:git/url "file://$bare"
                           :git/sha "$sha"}}
-       :do [{:run ["scripts/hi.lg" "world"]}]}}}
+       :do [{:run ["scripts/hi.lg" "world"]}]}
+  sayenv {:paths ["scripts"]
+          :deps {test/greet {:git/url "file://$bare"
+                             :git/sha "$sha"}}
+          :env {"RITE_HOME" "$home/fake"}
+          :do [{:run ["scripts/hi.lg" "env"]}]}}}
 EOF
     out="$(cd "$proj" && RITE_HOME="$home" "$RITE" say 2>&1)"
     assert_contains "$out" "hello world from dep" \
@@ -318,6 +328,13 @@ EOF
     out2="$(cd "$proj" && RITE_HOME="$home" "$RITE" say 2>&1)"
     assert_not_contains "$out2" "installing" ":run: second run reuses the cache"
     assert_contains "$out2" "hello world from dep" ":run: second run still works"
+    # A task :env is set around the step's process only: a RITE_HOME in :env
+    # must not redirect rite's own dep resolution to another cache.
+    out3="$(cd "$proj" && RITE_HOME="$home" "$RITE" sayenv 2>&1)"
+    assert_contains "$out3" "hello env from dep" ":run + :env: script still runs"
+    assert_not_contains "$out3" "installing" ":run + :env: deps resolved from rite's own cache"
+    [[ ! -e "$home/fake" ]] || fail ":run + :env: task RITE_HOME leaked into dep resolution"
+    pass ":run + :env: task RITE_HOME not used for the dep cache"
     rm -rf "$proj" "$home"
 else
     skip ":run scenario requires git"
@@ -343,21 +360,36 @@ assert_contains "$out" "conflicts with built-in command" "config: reserved task 
 rm -rf "$proj" "$home"
 
 # ---------------------------------------------------------------------------
-echo "==> Scenario 8: RITE_NO_COLOR disables escape codes"
+echo "==> Scenario 8: color is off when piped / NO_COLOR / RITE_NO_COLOR, on under a pty"
 proj="$(mktemp -d)"; home="$(mktemp -d)"
 cat > "$proj/rite.edn" <<'EOF'
 {:tasks {hi {:do [{:sh "echo hi"}]}}}
 EOF
-out="$(cd "$proj" && RITE_NO_COLOR=1 RITE_HOME="$home" "$RITE" hi 2>&1)"
+out="$(cd "$proj" && RITE_NO_COLOR=1 NO_COLOR= RITE_HOME="$home" "$RITE" hi 2>&1)"
 if has_esc "$out"; then fail "RITE_NO_COLOR: output still had escape codes"; fi
 pass "RITE_NO_COLOR: no escape codes in output"
-# Clear RITE_NO_COLOR explicitly so a caller that already exported it doesn't
-# turn this default-color assertion into a spurious failure.
-out_c="$(cd "$proj" && RITE_NO_COLOR= RITE_HOME="$home" "$RITE" hi 2>&1)"
-if has_esc "$out_c"; then
-    pass "default: colored headers contain escape codes"
+out="$(cd "$proj" && RITE_NO_COLOR= NO_COLOR=1 RITE_HOME="$home" "$RITE" hi 2>&1)"
+if has_esc "$out"; then fail "NO_COLOR: output still had escape codes"; fi
+pass "NO_COLOR: no escape codes in output"
+# Both opt-outs blank, but stderr is captured (not a terminal): still plain.
+out="$(cd "$proj" && RITE_NO_COLOR= NO_COLOR= RITE_HOME="$home" "$RITE" hi 2>&1)"
+if has_esc "$out"; then fail "piped: expected plain output but found escape codes"; fi
+pass "piped: no escape codes when stderr is not a terminal"
+# Under a pseudo-terminal (util-linux `script`), color is on by default and
+# NO_COLOR still turns it off.
+if script --version 2>/dev/null | grep -q util-linux; then
+    out_pty="$(script -qec "cd '$proj' && RITE_NO_COLOR= NO_COLOR= RITE_HOME='$home' '$RITE' hi" /dev/null)"
+    if has_esc "$out_pty"; then
+        pass "pty: colored headers contain escape codes"
+    else
+        echo "---- output ----" >&2; echo "$out_pty" >&2
+        fail "pty: expected colored output but found none"
+    fi
+    out_pty="$(script -qec "cd '$proj' && RITE_NO_COLOR= NO_COLOR=1 RITE_HOME='$home' '$RITE' hi" /dev/null)"
+    if has_esc "$out_pty"; then fail "pty + NO_COLOR: output still had escape codes"; fi
+    pass "pty + NO_COLOR: no escape codes"
 else
-    fail "default: expected colored output but found none"
+    skip "pty color checks require util-linux script"
 fi
 rm -rf "$proj" "$home"
 
@@ -463,7 +495,7 @@ cat > "$nodeps/rite.edn" <<'EOF'
 EOF
 set +e; out="$(cd "$nodeps" && RITE_HOME="$ndhome" "$RITE" install 2>&1)"; rc=$?; set -e
 [[ $rc -eq 0 ]] || fail "install no-deps: expected exit 0 (got $rc)"
-assert_contains "$out" "no dependencies to install" "install no-deps: message"
+assert_contains "$out" "nothing to fetch: no task declares :deps" "install no-deps: message"
 rm -rf "$nodeps" "$ndhome"
 
 # A fetch failure (dep points at a repo that was never created) exits 1 with a
@@ -483,6 +515,75 @@ EOF
 else
     skip "install fetch-failure scenario requires git"
 fi
+
+# ---------------------------------------------------------------------------
+echo "==> Scenario 11: task :env and :cwd"
+proj="$(mktemp -d)"; home="$(mktemp -d)"
+mkdir -p "$proj/sub dir" "$proj/other"
+cat > "$proj/sub dir/show.lg" <<'EOF'
+(println "show.lg found:" (file-exists? "show.lg"))
+EOF
+cat > "$proj/rite.edn" <<'EOF'
+{:vars {:level "debug"}
+ :tasks {envt  {:args [{:name :who}]
+                :env {"GREETING" "hi {{arg/who}}" "LEVEL" "{{var/level}}" "NUM" 3}
+                :do [{:sh "echo $GREETING/$LEVEL/$NUM"}]}
+         after {:depends [[envt "x"]] :do [{:sh "echo after=[$GREETING]"}]}
+         cwdt  {:cwd "sub dir"
+                :do [{:sh "basename \"$PWD\""} {:run ["show.lg"]}]}
+         multi {:cwd "sub dir" :do [{:sh "echo a; echo b"}]}
+         nodir {:cwd "missing" :do [{:sh "echo first; echo second"}]}
+         pathenv {:env {"PATH" "/usr/bin:/bin"} :cwd "sub dir"
+                  :do [{:run ["show.lg"]}]}}}
+EOF
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" envt bob 2>/dev/null)"
+assert_eq "$out" "hi bob/debug/3" ":env: set for the step, templates expanded, number stringified"
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" after 2>/dev/null)"
+assert_eq "$out" "hi x/debug/3
+after=[]" ":env: restored before the next plan entry"
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" cwdt 2>/dev/null)"
+assert_eq "$out" "sub dir
+show.lg found: true" ":cwd: :sh and :run steps run from :cwd"
+out="$(cd "$proj/other" && RITE_HOME="$home" "$RITE" cwdt 2>/dev/null)"
+assert_eq "$out" "sub dir
+show.lg found: true" ":cwd: resolved against the project root, not the invocation dir"
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" multi 2>/dev/null)"
+assert_eq "$out" "a
+b" ":cwd: compound :sh command keeps its syntax"
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" --verbose envt bob 2>&1)"
+assert_contains "$out" "+ env GREETING=hi bob LEVEL=debug NUM=3" ":env: --verbose prints the resolved env"
+err="$(cd "$proj" && RITE_HOME="$home" "$RITE" multi 2>&1 >/dev/null)"
+assert_contains "$err" "$ echo a; echo b" ":cwd: step line shows the task's own command"
+assert_not_contains "$err" "|| exit" ":cwd: step line hides the cd wrapper"
+set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" nodir 2>/dev/null)"; rc=$?; set -e
+[[ $rc -ne 0 ]] || fail ":cwd missing: expected non-zero exit"
+pass ":cwd missing: non-zero exit"
+assert_eq "$out" "" ":cwd missing: no part of a ;-separated command runs"
+set +e; err="$(cd "$proj" && RITE_HOME="$home" "$RITE" nodir 2>&1 >/dev/null)"; set -e
+assert_contains "$err" "=> Task nodir failed: step 1" ":cwd missing: failure line names the step"
+# :run through a relative executable path: the exe must still resolve after cd.
+ln -s "$RITE" "$proj/rite-bin"
+out="$(cd "$proj" && RITE_HOME="$home" ./rite-bin cwdt 2>/dev/null)"
+assert_eq "$out" "sub dir
+show.lg found: true" ":cwd: :run works when rite is invoked by a relative path"
+# rite on PATH by bare name, task :env replacing PATH: the :run re-exec must
+# still find this rite (resolved before the task env applies).
+set +e; out="$(cd "$proj" && PATH="$(dirname "$RITE"):$PATH" RITE_HOME="$home" rite pathenv 2>/dev/null)"; set -e
+assert_eq "$out" "show.lg found: true" ":env PATH: :run still re-execs this rite"
+# A directory and a non-executable file named rite earlier on PATH are skipped,
+# as the shell skips them.
+mkdir -p "$proj/shadow/rite" "$proj/noexec"
+: > "$proj/noexec/rite"
+set +e; out="$(cd "$proj" && PATH="$proj/shadow:$proj/noexec:$(dirname "$RITE"):$PATH" RITE_HOME="$home" rite pathenv 2>/dev/null)"; set -e
+assert_eq "$out" "show.lg found: true" ":env PATH: exe lookup skips dirs and non-executables"
+# rite-managed variables are rejected at load.
+cat > "$proj/rite.edn" <<'EOF'
+{:tasks {bad {:env {"RITE_SCRIPT" "1"} :do [{:sh "echo hi"}]}}}
+EOF
+set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" bad 2>&1)"; rc=$?; set -e
+[[ $rc -eq 1 ]] || fail ":env managed key: expected exit 1 (got $rc)"
+assert_contains "$out" "is managed by rite and cannot be set" ":env managed key: load error"
+rm -rf "$proj" "$home"
 
 # ---------------------------------------------------------------------------
 echo

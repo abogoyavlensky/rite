@@ -79,3 +79,45 @@
 (deftest exec-trace-line-shows-exe-and-argv
   (is (= "+ /usr/bin/rite s.lg prod\n"
          (script/exec-trace-line "/usr/bin/rite" ["s.lg" "prod"]))))
+
+;; ---------------------------------------------------------------------------
+;; :cwd for :run steps
+;; ---------------------------------------------------------------------------
+
+(deftest cwd-argv-wraps-in-sh
+  (is (= ["sh" "-c" "cd \"$1\" && shift && exec \"$@\"" "sh" "/p/sub dir"
+          "/bin/rite" "s.lg" "a"]
+         (script/cwd-argv "/p/sub dir" "/bin/rite" ["s.lg" "a"]))))
+
+(deftest absolute-exe-joins-relative-path
+  (is (= "/p/./bin/rite" (script/absolute-exe "./bin/rite" "/p"))))
+
+(deftest absolute-exe-keeps-absolute-path
+  (is (= "/usr/bin/rite" (script/absolute-exe "/usr/bin/rite" "/p"))))
+
+(deftest absolute-exe-keeps-bare-name
+  (is (= "rite" (script/absolute-exe "rite" "/p"))))
+
+;; ---------------------------------------------------------------------------
+;; resolve-exe — rite's own executable, found before any task :env applies
+;; ---------------------------------------------------------------------------
+
+(deftest resolve-exe-slash-path-made-absolute
+  (is (= "/p/./bin/rite"
+         (script/resolve-exe "./bin/rite" "/p" (constantly "/elsewhere/rite")))))
+
+(deftest resolve-exe-bare-name-uses-lookup
+  (is (= "/opt/rite/bin/rite"
+         (script/resolve-exe "rite" "/p" {"rite" "/opt/rite/bin/rite"}))))
+
+(deftest resolve-exe-relative-lookup-result-joined-to-cwd
+  ;; A relative PATH entry makes `command -v` print a relative path.
+  (is (= "/p/bin/rite"
+         (script/resolve-exe "rite" "/p" {"rite" "bin/rite"}))))
+
+(deftest resolve-exe-not-found-unchanged
+  (is (= "rite" (script/resolve-exe "rite" "/p" (constantly nil)))))
+
+(deftest resolve-exe-slashless-lookup-result-unchanged
+  ;; `command -v` prints a bare word for a builtin or function, never a path.
+  (is (= "rite" (script/resolve-exe "rite" "/p" {"rite" "rite"}))))
