@@ -1,6 +1,8 @@
 (ns rite.tasks
   (:require [rite.args :as args]
+            [rite.parallel :as parallel]
             [rite.path :as path]
+            [rite.plan :as plan]
             [rite.script :as script]
             [rite.style :as style]
             [string :as str]))
@@ -39,6 +41,11 @@
 ;; travels down as data and is applied around each step's process, never
 ;; around the :task step as a whole — so it can't reach basis resolution or
 ;; the lookup of rite's own executable either.
+;;
+;; A {:parallel [...]} step runs its children together under the supervisor
+;; in rite.parallel, inside the task's env. An :sh child runs from its own
+;; :cwd, else the task's; a :task child re-runs rite as a subprocess from the
+;; project root, its args resolved like a :task step's.
 ;; --------------------------------------------------------------------------
 
 (defn- as-string [value]
@@ -141,8 +148,58 @@
     (write! *err* (str "\n" (style/step-line (str/join " " argv)) "\n"))
     (script/exec-script! exe sp-value argv verbose? cwd)))
 
-(defn- run-step! [step bindings exe sp-value cwd verbose?]
+(defn- expand-parallel-child
+  "An expanded :parallel child: {:label? :sh|:task :command :echo :trace},
+   where :sh is the command before any cd wrapper (labels/defaults use it),
+   :command what the supervisor runs, :echo the `$` form and :trace the
+   --verbose line (nil when there is nothing to add)."
+  [child bindings exe project cwd]
+  (if (contains? child :sh)
+    (let [cmd (sh-command (:sh child) bindings)
+          dir (if-let [d (:cwd child)] (path/join project d) cwd)]
+      (cond-> {:sh cmd
+               :command (if dir (with-cwd cmd dir) cmd)
+               :echo (display-command cmd)
+               :trace (when dir (str "+ cd " dir))}
+        (:label child) (assoc :label (:label child))))
+    (let [[name arg-strings] (plan/resolve-entry (:task child) bindings)
+          command (parallel/task-child-command project exe name arg-strings)]
+      (cond-> {:task name
+               :command command
+               :echo (str/join " " (concat ["rite" (str name)] arg-strings))
+               :trace (str "+ " command)}
+        (:label child) (assoc :label (:label child))))))
+
+(defn- run-parallel-step!
+  "Run a :parallel step's children together under the supervisor: echo
+   `$ parallel: <labels>` and one `[label] $ cmd` line per child, then run
+   the supervisor (streaming). Returns its exit code: the first failing
+   child's code, 130/143 on SIGINT/SIGTERM, or 0."
+  [children bindings exe project cwd verbose?]
+  (let [expanded (mapv #(expand-parallel-child % bindings exe project cwd)
+                       children)
+        labels (parallel/labels expanded)
+        color? (style/color-enabled? os/getenv style/*stderr-tty?*)
+        prefixes (parallel/prefixes labels color?)]
+    (write! *err* (str "\n" (style/step-line
+                              (str "parallel: " (str/join ", " labels)))
+                       "\n"))
+    (doseq [[l c] (map vector labels expanded)]
+      (write! *err* (str "  [" l "] " (style/step-line (:echo c)) "\n"))
+      (when (and verbose? (:trace c))
+        (write! *err* (str "  [" l "] " (:trace c) "\n"))))
+    (apply os/exec*
+           (parallel/supervisor-argv
+             (mapv (fn [p l c] {:prefix p
+                                :label l
+                                :command (:command c)})
+                   prefixes labels expanded)
+             color?))))
+
+(defn- run-step! [step bindings exe sp-value project cwd verbose?]
   (cond
+    (contains? step :parallel)
+    (run-parallel-step! (:parallel step) bindings exe project cwd verbose?)
     (contains? step :sh)
     (if (:fail-on-output step)
       (run-checked-sh-step! (:sh step) bindings cwd verbose?)
@@ -206,7 +263,10 @@
    :run step re-execs. A :task step runs its sub-plan from `calls` (keyed by
    0-based step index), which inherits `env` and `cwd`."
   [name task bindings calls project env cwd verbose?]
-  (let [exe (when (some #(contains? % :run) (or (:do task) []))
+  (let [exe (when (some (fn [step]
+                          (or (contains? step :run)
+                              (some #(contains? % :task) (:parallel step))))
+                        (or (:do task) []))
               (script/resolve-exe (first os/args) (os/cwd)
                                   script/shell-lookup))]
     (loop [steps (or (:do task) [])
@@ -227,7 +287,7 @@
                                       (path/join project c)
                                       cwd)]
                        (with-env! env
-                         #(run-step! step bindings exe sp step-cwd
+                         #(run-step! step bindings exe sp project step-cwd
                                      verbose?))))]
           (if (zero? exit)
             (recur (rest steps) (inc i) sp)

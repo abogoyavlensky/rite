@@ -305,20 +305,22 @@ The script lives as one string constant in `src/rite/parallel.lg`. It is the onl
 > Deviation: the watchdog compares `ps -o ppid= -p $$` with the original `$PPID` instead of `kill -0 "$PPID"`, because a dead but unreaped parent still answers `kill -0`. Prefixes reach awk through `ENVIRON`, not `-v`, so backslashes in a label stay literal. On exit the supervisor gives the prefixers up to 2 seconds to drain (polling every 0.1 s) before it exits.
 > Deviation: the throwaway harness ran under dash, bash and `bash --posix`. Every case passed: exit codes 3, 2, 130 and 143; KILL after the 5-second bound for a TERM-ignoring child and grandchild; no leftover `sleep 3x`; the watchdog also fired for a parent killed and never reaped. The SIGINT case has to signal the job's process group under `set -m`. A background job without job control starts with INT ignored, and a non-interactive sh cannot trap a signal that was ignored on entry.
 
+> Deviation (codex must-fix, fixup `5c0c50e`): the prefixer is a shell `while IFS= read -r` loop, not `awk ... fflush()`. mawk, Ubuntu's default awk, block-buffers its piped input, so a dev server's lines would not show until much later. The `read` builtin takes a pipe byte by byte, so each line streams as soon as it is complete. The loop also keeps a final line that has no trailing newline. All harness cases were re-run under dash, bash and `bash --posix`.
+
 ### Task 7: Run `:parallel` steps
 
 **Files:**
 - Modify: `src/rite/tasks.lg` (`run-step!`, `run-steps!`), `src/rite/parallel.lg` (`run-parallel-step!`), `src/rite/plan.lg` (expose the `:task` arg resolver), `src/rite/style.lg` (`parallel-stop-line`)
 - Test: `tests/e2e.sh`
 
-- [ ] **Step 1: Implement `run-parallel-step!`**
+- [x] **Step 1: Implement `run-parallel-step!`**
   1. Expand each `:sh` child with `sh-command`. Compute its default label from that expanded command, then wrap it in `with-cwd` (its own `:cwd`, else the task's).
   2. Turn each `:task` child into `task-child-command`, with args resolved against the caller's bindings the same way `rite.plan` resolves `:task` step args. Reuse that resolver rather than copying it.
   3. Compute the labels and prefixes, then print the echo lines from the Design (`$ parallel: ...` and one `[label] $ cmd` line per child), plus the `--verbose` lines.
   4. Run `(apply os/exec* (supervisor-argv ...))` inside the task's `with-env!`, and return its exit code.
 
   rite's exe is resolved once, before env is applied, as `run-steps!` already does for `:run`. The supervisor itself prints the stop line, via `$1`-style args or an env var carrying the preformatted `=>` text.
-- [ ] **Step 2: E2E scenarios**
+- [x] **Step 2: E2E scenarios**
   - prefixed output from two `:sh` children;
   - a `:task` child runs another task with an arg;
   - a failing child stops a `sleep 30` sibling in under 5 seconds: the exit code is the child's, the stop line and the task failure line print, and `pgrep -f 'sleep 3[0]'` finds nothing;
@@ -328,10 +330,13 @@ The script lives as one string constant in `src/rite/parallel.lg`. It is the onl
   - start rite as a `set -m` background job (see the process-group harness under Testing), send SIGINT to its group: exit 130 and no leftovers;
   - send SIGTERM to rite's PID only: within 3 seconds no leftovers (the watchdog);
   - task `:env` reaches both children.
-- [ ] **Step 3: Run the suite and commit**
+- [x] **Step 3: Run the suite and commit**
   Run: `bash tests/run.sh`
   Expected: PASS.
   `git commit -m "feat: run :parallel steps"`
+
+> Deviation: `run-parallel-step!` lives in `tasks.lg`, not `parallel.lg`. It needs `sh-command`, `with-cwd` and `display-command`, and `rite.parallel` cannot require `rite.tasks` without a cycle. `rite.parallel` keeps the script and the pure helpers. There is no `style/parallel-stop-line`: the supervisor prints the stop line itself, using colour codes from `style/purple-codes`. `style/label` colours a `[label]`. `plan/resolve-entry` is now public and reused for `:task` children.
+> Deviation: `run-steps!` also resolves rite's exe when a `:parallel` step has a `:task` child. The e2e leak checks use `sleep 51`–`sleep 57`, one per scenario, matched as a whole `ps` line (`^sleep 51$`) rather than with `pgrep -f`. The child echo lines are `  [label] $ cmd`; with `--verbose` each child also gets a `  [label] + cd <dir>` or `  [label] + <subprocess command>` line.
 
 ### Task 8: README
 
