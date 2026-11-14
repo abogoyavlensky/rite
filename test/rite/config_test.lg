@@ -276,7 +276,7 @@
 
 (deftest load-rejects-step-with-unknown-key
   (is (= {:errors [{:path [:tasks 'fmt :do 0]
-                    :msg "unknown key :env (allowed: :sh, :run, :task)"}]}
+                    :msg "unknown key :env (allowed: :sh, :run, :task, :cwd)"}]}
          (load-cfg {:tasks {'fmt {:do [{:sh "echo hi"
                                         :env {"FOO" "1"}}]}}}))))
 
@@ -504,7 +504,7 @@
   (is (= {:errors [{:path [:vars :version]
                     :msg "must be a string or number, got [:x]"}
                    {:path [:tasks 'lint :do 0]
-                    :msg "unknown key :shh (allowed: :sh, :run, :task)"}]}
+                    :msg "unknown key :shh (allowed: :sh, :run, :task, :cwd)"}]}
          (load-cfg {:vars {:version [:x]}
                     :tasks {'lint {:do [{:shh "x"}]}}}))))
 
@@ -880,3 +880,32 @@
                     :msg "must be a string, got 5"}]}
          (load-cfg {:tasks {'t {:cwd 5
                                 :do [{:sh "echo hi"}]}}}))))
+
+;; ---------------------------------------------------------------------------
+;; load-config: step-level :cwd
+;; ---------------------------------------------------------------------------
+
+(deftest load-accepts-step-cwd
+  (let [cfg {:tasks {'t {:do [{:sh "npm ci"
+                               :cwd "web"}
+                              {:run "x.lg"
+                               :cwd "scripts"}]}}}]
+    (is (= {:cfg cfg} (load-cfg cfg)))))
+
+(deftest load-rejects-bad-step-cwd
+  (is (= {:errors [{:path [:tasks 't :do 0 :cwd]
+                    :msg "must be relative (no leading /)"}]}
+         (load-cfg {:tasks {'t {:do [{:sh "echo hi"
+                                      :cwd "/abs"}]}}})))
+  (is (= {:errors [{:path [:tasks 't :do :cwd]
+                    :msg "must not contain .. segments"}]}
+         (load-cfg {:tasks {'t {:do {:run "x.lg"
+                                     :cwd "a/../b"}}}}))))
+
+(deftest load-rejects-cwd-on-task-step
+  (is (= {:errors [{:path [:tasks 't :do 0 :cwd]
+                    :msg (str ":cwd is not allowed on a :task step; set :cwd "
+                              "on the called task")}]}
+         (load-cfg {:tasks {'fmt {:do {:sh "echo fmt"}}
+                            't {:do [{:task 'fmt
+                                      :cwd "web"}]}}}))))
