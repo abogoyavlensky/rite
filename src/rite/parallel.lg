@@ -32,11 +32,12 @@
 ;;   FIFO in a mktemp -d dir. The supervisor holds it open read-write on fd 3,
 ;;   so a read never sees EOF and a write never blocks.
 ;; - Children. Each child is a background job:
-;;     { sh -c "$cmd" & record its PID; start; wait; exit } 2>&1 | awk prefix &
-;;   The PID file records the real command, not awk. awk with fflush() is the
-;;   portable line-buffered prefixer (sed -u is GNU-only); the prefix arrives
-;;   through ENVIRON, since awk -v would interpret backslashes in it. Children
-;;   get no stdin (/dev/null) and no fd 3.
+;;     { sh -c "$cmd" & record its PID; start; wait; exit } 2>&1 | prefix &
+;;   The PID file records the real command, not the prefixer. The prefixer is
+;;   a `while read -r` loop: read takes a pipe byte by byte, so lines stream
+;;   as they complete. awk cannot do this portably (mawk, Ubuntu's default,
+;;   block-buffers its input even with fflush()), and sed -u is GNU-only.
+;;   Children get no stdin (/dev/null) and no fd 3.
 ;; - Startup barrier. Before handling any exit, the supervisor waits for all
 ;;   N start events. A child's start follows its PID file, so once the
 ;;   barrier passes every PID is recorded and a stop cannot miss a sibling.
@@ -154,6 +155,14 @@ on_signal() {
 trap 'on_signal 130' INT
 trap 'on_signal 143' TERM
 
+# Copy stdin to stdout, each line led by $1. The read builtin takes a pipe
+# byte by byte, so every line goes out as soon as it is complete.
+prefix() {
+  while IFS= read -r _line || [ -n \"$_line\" ]; do
+    printf '%s%s\\n' \"$1\" \"$_line\"
+  done
+}
+
 i=0
 while [ $# -gt 0 ]; do
   i=$((i + 1))
@@ -165,7 +174,7 @@ while [ $# -gt 0 ]; do
     echo \"start $i\" >&3
     wait \"$c\" 2>/dev/null
     echo \"exit $i $?\" >&3
-  } 2>&1 | P=$1 awk '{ print ENVIRON[\"P\"] $0; fflush() }' &
+  } 2>&1 | prefix \"$1\" &
   apids=\"$apids $!\"
   shift 3
 done
