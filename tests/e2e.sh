@@ -702,5 +702,28 @@ $root/sub" "step :cwd: replaces the task's :cwd for that step"
 rm -rf "$proj" "$home"
 
 # ---------------------------------------------------------------------------
+echo "==> Scenario 14: multi-line :sh steps"
+proj="$(mktemp -d)"; home="$(mktemp -d)"
+cat > "$proj/rite.edn" <<'EOF'
+{:tasks {script {:do [{:sh "
+  echo one
+
+  if true; then echo two; fi
+  echo three
+"}]}}}
+EOF
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" script 2>/dev/null)"
+assert_eq "$out" "one
+two
+three" "multi-line :sh: the whole script runs"
+err="$(cd "$proj" && RITE_HOME="$home" "$RITE" script 2>&1 >/dev/null)"
+assert_contains "$err" "$ echo one … (+2 lines)" "multi-line :sh: compact step echo"
+assert_not_contains "$err" "echo three" "multi-line :sh: echo hides later lines"
+err="$(cd "$proj" && RITE_HOME="$home" "$RITE" --verbose script 2>&1 >/dev/null)"
+assert_contains "$err" "if true; then echo two; fi" "multi-line :sh: --verbose shows every line"
+assert_contains "$err" "echo three" "multi-line :sh: --verbose shows the last line"
+rm -rf "$proj" "$home"
+
+# ---------------------------------------------------------------------------
 echo
 echo "All e2e scenarios passed ($PASS_COUNT assertions)."

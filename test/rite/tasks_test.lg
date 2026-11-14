@@ -79,3 +79,22 @@
   (is (= "+ env A=1 B=2\n"
          (tasks/env-trace-line {"B" "2"
                                 "A" "1"}))))
+
+;; ---------------------------------------------------------------------------
+;; display-command — the `$` echo for a :sh step
+;; ---------------------------------------------------------------------------
+
+(deftest display-command-single-line-unchanged
+  (is (= "echo hi" (tasks/display-command "echo hi"))))
+
+(deftest display-command-multi-line-shows-first-line
+  (is (= "echo one … (+2 lines)"
+         (tasks/display-command
+           "\n  echo one\n\nif x; then y; fi\necho three\n"))))
+
+(deftest display-command-two-lines
+  (is (= "echo a … (+1 lines)"
+         (tasks/display-command "echo a\necho b"))))
+
+(deftest display-command-trims-a-lone-padded-line
+  (is (= "echo hi" (tasks/display-command "\n  echo hi\n"))))

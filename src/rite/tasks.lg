@@ -83,12 +83,31 @@
        (str/join " " (map (fn [k] (str k "=" (get env k))) (sort (keys env))))
        "\n"))
 
+(defn display-command
+  "The `$` echo form of a :sh command. A command with more than one non-blank
+   line shows its first non-blank line, trimmed, then ` … (+N lines)` for the
+   N non-blank lines after it. A single-line command is returned unchanged
+   (padded by newlines, it is trimmed to that line); long lines are never
+   truncated, since hiding part of a real command hurts more than the noise."
+  [cmd]
+  (let [lines (vec (keep (fn [l] (when-not (str/blank? l) (str/trim l)))
+                         (str/split cmd "\n")))]
+    (cond
+      (> (count lines) 1)
+      (str (first lines) " … (+" (dec (count lines)) " lines)")
+
+      (and (= 1 (count lines)) (str/includes? cmd "\n"))
+      (first lines)
+
+      :else cmd)))
+
 (defn- run-sh-step! [value bindings cwd verbose?]
   (let [cmd (sh-command value bindings)
         full (if cwd (with-cwd cmd cwd) cmd)]
-    ;; The step line shows the task's own command; only --verbose shows the
-    ;; cd wrapper that applies :cwd.
-    (write! *err* (str "\n" (style/step-line cmd) "\n"))
+    ;; The step line shows the task's own command, compacted when it spans
+    ;; several lines; only --verbose shows the full script and the cd wrapper
+    ;; that applies :cwd.
+    (write! *err* (str "\n" (style/step-line (display-command cmd)) "\n"))
     (when verbose?
       (write! *err* (str "+ sh -c " full "\n")))
     (os/exec* "sh" "-c" full)))
