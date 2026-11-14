@@ -353,15 +353,19 @@ The script lives as one string constant in `src/rite/parallel.lg`. It is the onl
 - [x] **Step 2: Commit**
   `git commit -m "docs: document step :cwd, :fail-on-output and :parallel"`
 
+> Advisory (codex, Task 7): a `:task` child naming a task that ends in `.lg` re-runs `rite build.lg`, which `cli/user-args` takes for dev mode, so the child prints help and exits 0. Running `rite build.lg` from a shell has the same problem, so this predates `:parallel`. It is backlogged in `docs/backlog/task-name-ending-in-lg.md` and not fixed here.
+
 ### Task 9: macOS CI job
 
 **Files:**
 - Modify: `.github/workflows/checks.yml`
 
-- [ ] **Step 1: Add the job**
+- [x] **Step 1: Add the job**
   Add a `macos-latest` job (or a matrix entry) that runs the same `lgx check`. Install the same mise tools the Ubuntu job uses.
 - [ ] **Step 2: Verify**
   Run: `actionlint` if available, otherwise check the YAML by eye.
   The job only runs on GitHub: push the branch and have the maintainer confirm that both jobs pass. A macOS failure in the `:parallel` scenarios is a real finding, not flakiness. bash 3.2 was not in the spike.
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
   `git commit -m "ci: run checks on macOS"`
+
+> Deviation: the macOS job is a `matrix.os` entry (`ubuntu-latest`, `macos-latest`, `fail-fast: false`) on the existing job, so `release.yml`'s `workflow_call` runs both. `actionlint` 1.7.12 (with shellcheck 0.11.0) reports nothing for `checks.yml`; its only finding is an existing info-level SC2035 in `release.yml`. Step 2's GitHub run is pending: the branch is pushed, and the maintainer still has to confirm that both jobs pass.
