@@ -31,9 +31,10 @@
     (args/expand item bindings)
     (first (args/substitute [item] bindings false))))
 
-(defn- resolve-entry
-  "Resolve a :depends entry against parent bindings into
-   [dep-name resolved-arg-strings]. A bare symbol carries no args."
+(defn resolve-entry
+  "Resolve a :depends entry (or a :task step or :parallel :task child value)
+   against parent bindings into [dep-name resolved-arg-strings]. A bare
+   symbol carries no args."
   [entry bindings]
   (if (symbol? entry)
     [entry []]

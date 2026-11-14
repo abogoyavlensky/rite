@@ -1,6 +1,8 @@
 (ns rite.tasks
   (:require [rite.args :as args]
+            [rite.parallel :as parallel]
             [rite.path :as path]
+            [rite.plan :as plan]
             [rite.script :as script]
             [rite.style :as style]
             [string :as str]))
@@ -28,7 +30,9 @@
 ;; A task's :env is set around each step's process and restored after it; its
 ;; :cwd wraps each step in `sh` with a cd (rite's own directory never changes,
 ;; and let-go's chdir is Linux-only). Neither reaches the task's :depends
-;; entries, which are separate plan entries with their own :env/:cwd.
+;; entries, which are separate plan entries with their own :env/:cwd. A :sh or
+;; :run step's own :cwd (relative to the project root) replaces the task's
+;; effective cwd for that step only.
 ;;
 ;; A {:task ...} step runs the called task's sub-plan (the entry's :calls,
 ;; built by rite.plan) in-process, as if the step ran `rite <task> args`: the
@@ -37,6 +41,11 @@
 ;; travels down as data and is applied around each step's process, never
 ;; around the :task step as a whole — so it can't reach basis resolution or
 ;; the lookup of rite's own executable either.
+;;
+;; A {:parallel [...]} step runs its children together under the supervisor
+;; in rite.parallel, inside the task's env. An :sh child runs from its own
+;; :cwd, else the task's; a :task child re-runs rite as a subprocess from the
+;; project root, its args resolved like a :task step's.
 ;; --------------------------------------------------------------------------
 
 (defn- as-string [value]
@@ -81,24 +90,120 @@
        (str/join " " (map (fn [k] (str k "=" (get env k))) (sort (keys env))))
        "\n"))
 
-(defn- run-sh-step! [value bindings cwd verbose?]
+(defn display-command
+  "The `$` echo form of a :sh command. A command with more than one non-blank
+   line shows its first non-blank line, trimmed, then ` … (+N lines)` for the
+   N non-blank lines after it. A single-line command is returned unchanged
+   (padded by newlines, it is trimmed to that line); long lines are never
+   truncated, since hiding part of a real command hurts more than the noise."
+  [cmd]
+  (let [lines (vec (keep (fn [l] (when-not (str/blank? l) (str/trim l)))
+                         (str/split cmd "\n")))]
+    (cond
+      (> (count lines) 1)
+      (str (first lines) " … (+" (dec (count lines)) " lines)")
+
+      (and (= 1 (count lines)) (str/includes? cmd "\n"))
+      (first lines)
+
+      :else cmd)))
+
+(defn- prepare-sh-step!
+  "Echo a :sh step (and, with --verbose, its full `sh -c` line) and return the
+   command to hand to `sh -c`, wrapped in a cd when `cwd` is set."
+  [value bindings cwd verbose?]
   (let [cmd (sh-command value bindings)
         full (if cwd (with-cwd cmd cwd) cmd)]
-    ;; The step line shows the task's own command; only --verbose shows the
-    ;; cd wrapper that applies :cwd.
-    (write! *err* (str "\n" (style/step-line cmd) "\n"))
+    ;; The step line shows the task's own command, compacted when it spans
+    ;; several lines; only --verbose shows the full script and the cd wrapper
+    ;; that applies :cwd.
+    (write! *err* (str "\n" (style/step-line (display-command cmd)) "\n"))
     (when verbose?
       (write! *err* (str "+ sh -c " full "\n")))
-    (os/exec* "sh" "-c" full)))
+    full))
+
+(defn- run-sh-step! [value bindings cwd verbose?]
+  (os/exec* "sh" "-c" (prepare-sh-step! value bindings cwd verbose?)))
+
+(defn- run-checked-sh-step!
+  "Run a :fail-on-output :sh step. Its output is buffered (os/sh), then
+   replayed: stdout to *out*, stderr to *err*. A non-zero exit is returned as
+   is; otherwise any non-blank stdout fails the step with 1. Only stdout
+   counts, so the command may still warn on stderr."
+  [value bindings cwd verbose?]
+  (let [r (os/sh "sh" "-c" (prepare-sh-step! value bindings cwd verbose?))]
+    (write! *out* (:out r))
+    (write! *err* (:err r))
+    (cond
+      (not (zero? (:exit r))) (:exit r)
+
+      (not (str/blank? (:out r)))
+      (do (write! *err* (str "\n" (style/output-failure-line) "\n"))
+          1)
+
+      :else 0)))
 
 (defn- run-run-step! [value bindings exe sp-value cwd verbose?]
   (let [argv (run-argv value bindings)]
     (write! *err* (str "\n" (style/step-line (str/join " " argv)) "\n"))
     (script/exec-script! exe sp-value argv verbose? cwd)))
 
-(defn- run-step! [step bindings exe sp-value cwd verbose?]
+(defn- expand-parallel-child
+  "An expanded :parallel child: {:label? :sh|:task :command :echo :trace},
+   where :sh is the command before any cd wrapper (labels/defaults use it),
+   :command what the supervisor runs, :echo the `$` form and :trace the
+   --verbose line (nil when there is nothing to add)."
+  [child bindings exe project cwd]
+  (if (contains? child :sh)
+    (let [cmd (sh-command (:sh child) bindings)
+          dir (if-let [d (:cwd child)] (path/join project d) cwd)]
+      (cond-> {:sh cmd
+               :command (if dir (with-cwd cmd dir) cmd)
+               :echo (display-command cmd)
+               :trace (when dir (str "+ cd " dir))}
+        (:label child) (assoc :label (:label child))))
+    (let [[name arg-strings] (plan/resolve-entry (:task child) bindings)
+          command (parallel/task-child-command project exe name arg-strings)]
+      (cond-> {:task name
+               :command command
+               :echo (str/join " " (concat ["rite" (str name)] arg-strings))
+               :trace (str "+ " command)}
+        (:label child) (assoc :label (:label child))))))
+
+(defn- run-parallel-step!
+  "Run a :parallel step's children together under the supervisor: echo
+   `$ parallel: <labels>` and one `[label] $ cmd` line per child, then run
+   the supervisor (streaming). Returns its exit code: the first failing
+   child's code, 130/143 on SIGINT/SIGTERM, or 0."
+  [children bindings exe project cwd verbose?]
+  (let [expanded (mapv #(expand-parallel-child % bindings exe project cwd)
+                       children)
+        labels (parallel/labels expanded)
+        color? (style/color-enabled? os/getenv style/*stderr-tty?*)
+        prefixes (parallel/prefixes labels color?)]
+    (write! *err* (str "\n" (style/step-line
+                              (str "parallel: " (str/join ", " labels)))
+                       "\n"))
+    (doseq [[l c] (map vector labels expanded)]
+      (write! *err* (str "  [" l "] " (style/step-line (:echo c)) "\n"))
+      (when (and verbose? (:trace c))
+        (write! *err* (str "  [" l "] " (:trace c) "\n"))))
+    (apply os/exec*
+           (parallel/supervisor-argv
+             (mapv (fn [p l c] {:prefix p
+                                :label l
+                                :command (:command c)})
+                   prefixes labels expanded)
+             color?))))
+
+(defn- run-step! [step bindings exe sp-value project cwd verbose?]
   (cond
-    (contains? step :sh) (run-sh-step! (:sh step) bindings cwd verbose?)
+    (contains? step :parallel)
+    (run-parallel-step! (:parallel step) bindings exe project cwd verbose?)
+    (contains? step :sh)
+    (if (:fail-on-output step)
+      (run-checked-sh-step! (:sh step) bindings cwd verbose?)
+      (run-sh-step! (:sh step) bindings cwd verbose?))
     (contains? step :run)
     (run-run-step! (:run step) bindings exe sp-value cwd verbose?)
     :else (throw (ex-info "step has no action key" {:step step}))))
@@ -158,7 +263,10 @@
    :run step re-execs. A :task step runs its sub-plan from `calls` (keyed by
    0-based step index), which inherits `env` and `cwd`."
   [name task bindings calls project env cwd verbose?]
-  (let [exe (when (some #(contains? % :run) (or (:do task) []))
+  (let [exe (when (some (fn [step]
+                          (or (contains? step :run)
+                              (some #(contains? % :task) (:parallel step))))
+                        (or (:do task) []))
               (script/resolve-exe (first os/args) (os/cwd)
                                   script/shell-lookup))]
     (loop [steps (or (:do task) [])
@@ -175,8 +283,12 @@
                                      {:env env
                                       :cwd cwd}
                                      verbose?)
-                     (with-env! env
-                       #(run-step! step bindings exe sp cwd verbose?)))]
+                     (let [step-cwd (if-let [c (:cwd step)]
+                                      (path/join project c)
+                                      cwd)]
+                       (with-env! env
+                         #(run-step! step bindings exe sp project step-cwd
+                                     verbose?))))]
           (if (zero? exit)
             (recur (rest steps) (inc i) sp)
             (do (write! *err* (str "\n" (style/failure-line name i exit) "\n"))

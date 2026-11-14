@@ -176,16 +176,96 @@
           (pr-str entry))]))
 
 (defn- exactly-one-action-errors [step]
-  (when (not= 1 (count (filter #(contains? step %) [:sh :run :task])))
-    "must contain exactly one of :sh, :run, :task"))
+  (when (not= 1 (count (filter #(contains? step %) [:sh :run :task :parallel])))
+    "must contain exactly one of :sh, :run, :task, :parallel"))
+
+;; --- :parallel children: {:sh ...} or {:task ...}, with optional :label, and
+;; --- :cwd on :sh children only. Checked in order — the action keys first, so
+;; --- a :run or nested :parallel child gets its own message rather than an
+;; --- unknown-key error.
+
+(defn- parallel-child-action-errors [child]
+  (cond
+    (contains? child :run) ":run is not allowed in :parallel; use :sh or :task"
+    (contains? child :parallel) ":parallel steps cannot be nested"
+    (not= 1 (count (filter #(contains? child %) [:sh :task])))
+    "must contain exactly one of :sh, :task"
+    :else nil))
+
+(defn- parallel-child-key-errors [child]
+  (when (and (contains? child :task) (contains? child :cwd))
+    {:path [:cwd]
+     :msg (str ":cwd is not allowed on a :task child; set :cwd on the called "
+               "task")}))
+
+(def ^:private parallel-child-schema
+  [:and
+   :map
+   [:fn parallel-child-action-errors]
+   [:map {:closed true}
+    [:sh {:optional true} [:fn action-value-errors]]
+    [:task {:optional true} [:fn depends-entry-errors]]
+    [:cwd {:optional true} rel-path-schema]
+    [:label {:optional true} [:fn non-blank-string-errors]]]
+   [:fn parallel-child-key-errors]])
+
+(defn- parallel-label-errors
+  "Explicit :label values must be distinct; each repeat is reported at its
+   own [j :label]. Generated labels are made unique at run time instead."
+  [children]
+  (loop [j 0
+         seen #{}
+         acc []]
+    (if (>= j (count children))
+      acc
+      (let [l (:label (nth children j))]
+        (recur (inc j)
+               (if l (conj seen l) seen)
+               (if (and l (contains? seen l))
+                 (conj acc {:path [j :label]
+                            :msg (str "duplicate label " (pr-str l))})
+                 acc))))))
+
+(def ^:private parallel-schema
+  [:and
+   [:vector {:min 1} parallel-child-schema]
+   [:fn parallel-label-errors]])
+
+(defn- boolean-errors [v]
+  (when-not (boolean? v)
+    (str "must be true or false, got " (pr-str v))))
+
+(defn- step-key-errors
+  "Step cross-key rules, run once the step has exactly one action: :cwd
+   belongs to :sh and :run steps only (a called task's cwd is already its own
+   :cwd or the caller's, so a :task step takes none; a :parallel step sets it
+   per child), and :fail-on-output to :sh steps only."
+  [step]
+  (vec (concat
+         (when (and (contains? step :task) (contains? step :cwd))
+           [{:path [:cwd]
+             :msg (str ":cwd is not allowed on a :task step; set :cwd on the "
+                       "called task")}])
+         (when (and (contains? step :parallel) (contains? step :cwd))
+           [{:path [:cwd]
+             :msg (str ":cwd is not allowed on a :parallel step; set :cwd on "
+                       "its :sh children")}])
+         (when (and (contains? step :fail-on-output)
+                    (not (contains? step :sh)))
+           [{:path [:fail-on-output]
+             :msg ":fail-on-output is only allowed on a :sh step"}]))))
 
 (def ^:private step-schema
   [:and
    [:map {:closed true}
     [:sh {:optional true} [:fn action-value-errors]]
     [:run {:optional true} [:fn action-value-errors]]
-    [:task {:optional true} [:fn depends-entry-errors]]]
-   [:fn exactly-one-action-errors]])
+    [:task {:optional true} [:fn depends-entry-errors]]
+    [:parallel {:optional true} parallel-schema]
+    [:cwd {:optional true} rel-path-schema]
+    [:fail-on-output {:optional true} [:fn boolean-errors]]]
+   [:fn exactly-one-action-errors]
+   [:fn step-key-errors]])
 
 (defn- do-errors
   "A task's :do — a single step map or a non-empty vector of steps. Recurses
@@ -409,13 +489,24 @@
   "Errors for one valid step: every :arg/* keyword item or {{arg/*}} string
    token must name a declared arg, every :var/* a defined var. Paths are
    relative to the step — [:sh j] for a vector item, [:sh] for a string
-   step value. A :task step is skipped: task-steps-refs-errors checks it like
-   a :depends entry."
+   step value. A :parallel step recurses into its children, prefixing
+   [:parallel j]. A :task step (or child) is skipped: depends-refs-errors
+   checks it like a :depends entry."
   [declared arg-label defined-vars var-label step]
   (let [k (if (contains? step :sh) :sh :run)
         v (get step k)]
     (cond
       (contains? step :task) []
+
+      (contains? step :parallel)
+      (let [children (:parallel step)]
+        (vec (mapcat
+               (fn [j]
+                 (mapv (fn [e] {:path (vec (concat [:parallel j] (:path e)))
+                                :msg (:msg e)})
+                       (step-ref-errors declared arg-label defined-vars
+                                        var-label (nth children j))))
+               (range (count children)))))
 
       (string? v)
       (string-token-errors declared arg-label defined-vars var-label [k] v)
@@ -579,19 +670,34 @@
 
           :else [])))))
 
+(defn- step-task-calls
+  "[step path-suffix] for `step` (at `suffix`) if it is a :task step, or for
+   each :task child of a :parallel step, at suffix + [:parallel j]."
+  [step suffix]
+  (cond
+    (contains? step :task) [[step suffix]]
+
+    (contains? step :parallel)
+    (let [children (:parallel step)]
+      (vec (keep (fn [j]
+                   (when (contains? (nth children j) :task)
+                     [(nth children j) (conj suffix :parallel j)]))
+                 (range (count children)))))
+
+    :else []))
+
 (defn- task-steps
-  "[step path-suffix] for each :task step of `task`, walking both :do forms
-   (validation runs before normalize-config): the suffix is [:do] for a
-   single step map, [:do i] for a vector of steps."
+  "[step path-suffix] for each :task step of `task` and each :task child of
+   its :parallel steps, walking both :do forms (validation runs before
+   normalize-config): the suffix is [:do] for a single step map, [:do i] for
+   a vector of steps, then [:parallel j] for a child."
   [task]
   (let [d (:do task)]
     (cond
       (nil? d) []
-      (map? d) (if (contains? d :task) [[d [:do]]] [])
-      :else (vec (keep (fn [i]
-                         (when (contains? (nth d i) :task)
-                           [(nth d i) [:do i]]))
-                       (range (count d)))))))
+      (map? d) (step-task-calls d [:do])
+      :else (vec (mapcat (fn [i] (step-task-calls (nth d i) [:do i]))
+                         (range (count d)))))))
 
 (defn- depends-refs-errors
   "Semantic errors for every task's :depends entries, then its :task steps."

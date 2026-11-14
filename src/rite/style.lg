@@ -45,9 +45,12 @@
 ;; bold, since these status lines print on every command and a lighter weight
 ;; reads calmer for everyday use. Cube colors (not the 0-15 theme palette) so the
 ;; shade stays stable regardless of the user's color scheme.
+(defn- paint [code s]
+  (str "[38;5;" code "m" s "[0m"))
+
 (defn- colorize [code s]
   (if (color-enabled? os/getenv *stderr-tty?*)
-    (str "[38;5;" code "m" s "[0m")
+    (paint code s)
     s))
 
 (defn green
@@ -84,3 +87,28 @@
   [name step-number exit]
   (purple (str "=> Task " name " failed: step " step-number " exited with "
                exit)))
+
+(defn output-failure-line
+  "Purple `=> step printed output; expected none` line, printed when a
+   :fail-on-output step exits 0 but writes to stdout. Callers add the leading
+   blank line."
+  []
+  (purple "=> step printed output; expected none"))
+
+(defn label
+  "A :parallel child's `[label]`, purple when `color?` is true. The caller
+   decides color? once (color-enabled?), since the label is written by the
+   supervisor rather than printed here."
+  [s color?]
+  (if color? (paint purple-code s) s))
+
+(defn purple-codes
+  "[open close]: the escape codes that make text purple, or [\"\" \"\"] when
+   `color?` is false. For text written by a subprocess, such as the :parallel
+   supervisor's stop line."
+  [color?]
+  (if color?
+    (let [painted (paint purple-code "")
+          i (str/index-of painted "m")]
+      [(subs painted 0 (inc i)) (subs painted (inc i))])
+    ["" ""]))

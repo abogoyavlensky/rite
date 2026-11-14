@@ -673,5 +673,198 @@ assert_contains "$out" "dependency cycle" ":task cycle: load-time error"
 rm -rf "$proj" "$home"
 
 # ---------------------------------------------------------------------------
+echo "==> Scenario 13: step-level :cwd"
+proj="$(mktemp -d)"; home="$(mktemp -d)"
+mkdir -p "$proj/sub" "$proj/scripts" "$proj/nested/deeper"
+cat > "$proj/scripts/show.lg" <<'EOF'
+(println "show.lg found:" (file-exists? "show.lg"))
+EOF
+cat > "$proj/rite.edn" <<'EOF'
+{:tasks {steps {:cwd "." :do [{:sh "pwd"} {:sh "pwd" :cwd "sub"} {:sh "pwd"}]}
+         runs  {:do [{:run ["show.lg"] :cwd "scripts"} {:sh "pwd"}]}
+         over  {:cwd "sub" :do [{:sh "pwd" :cwd "scripts"} {:sh "pwd"}]}}}
+EOF
+root="$(cd "$proj" && pwd -P)"
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" steps 2>/dev/null)"
+assert_eq "$out" "$root
+$root/sub
+$root" "step :cwd: applies to its step only"
+out="$(cd "$proj/nested/deeper" && RITE_HOME="$home" "$RITE" steps 2>/dev/null)"
+assert_eq "$out" "$root
+$root/sub
+$root" "step :cwd: resolved against the project root, not the invocation dir"
+out="$(cd "$proj/nested" && RITE_HOME="$home" "$RITE" runs 2>/dev/null)"
+assert_eq "$out" "show.lg found: true
+$root/nested" "step :cwd: a :run step runs from its own :cwd, the next step from the task's"
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" over 2>/dev/null)"
+assert_eq "$out" "$root/scripts
+$root/sub" "step :cwd: replaces the task's :cwd for that step"
+rm -rf "$proj" "$home"
+
+# ---------------------------------------------------------------------------
+echo "==> Scenario 14: multi-line :sh steps"
+proj="$(mktemp -d)"; home="$(mktemp -d)"
+cat > "$proj/rite.edn" <<'EOF'
+{:tasks {script {:do [{:sh "
+  echo one
+
+  if true; then echo two; fi
+  echo three
+"}]}}}
+EOF
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" script 2>/dev/null)"
+assert_eq "$out" "one
+two
+three" "multi-line :sh: the whole script runs"
+err="$(cd "$proj" && RITE_HOME="$home" "$RITE" script 2>&1 >/dev/null)"
+assert_contains "$err" "$ echo one … (+2 lines)" "multi-line :sh: compact step echo"
+assert_not_contains "$err" "echo three" "multi-line :sh: echo hides later lines"
+err="$(cd "$proj" && RITE_HOME="$home" "$RITE" --verbose script 2>&1 >/dev/null)"
+assert_contains "$err" "if true; then echo two; fi" "multi-line :sh: --verbose shows every line"
+assert_contains "$err" "echo three" "multi-line :sh: --verbose shows the last line"
+rm -rf "$proj" "$home"
+
+# ---------------------------------------------------------------------------
+echo "==> Scenario 15: :fail-on-output"
+proj="$(mktemp -d)"; home="$(mktemp -d)"
+cat > "$proj/rite.edn" <<'EOF'
+{:tasks {quiet  {:do [{:sh "printf ''" :fail-on-output true} {:sh "echo after"}]}
+         stale  {:do [{:sh "echo stale" :fail-on-output true} {:sh "echo after"}]}
+         broken {:do [{:sh "exit 4" :fail-on-output true}]}
+         warn   {:do [{:sh "echo warn >&2" :fail-on-output true}]}}}
+EOF
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" quiet 2>/dev/null)"
+assert_eq "$out" "after" ":fail-on-output: silence passes"
+set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" stale 2>&1)"; rc=$?; set -e
+[[ $rc -eq 1 ]] || fail ":fail-on-output stdout: expected exit 1 (got $rc)"
+pass ":fail-on-output stdout: exits 1"
+assert_contains "$out" "stale" ":fail-on-output stdout: the output is shown"
+assert_contains "$out" "=> step printed output; expected none" ":fail-on-output stdout: output-failure line"
+assert_contains "$out" "=> Task stale failed: step 1 exited with 1" ":fail-on-output stdout: task failure line"
+assert_not_contains "$out" "after" ":fail-on-output stdout: later steps skipped"
+set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" broken 2>&1)"; rc=$?; set -e
+[[ $rc -eq 4 ]] || fail ":fail-on-output exit: expected exit 4 (got $rc)"
+pass ":fail-on-output exit: keeps the command's non-zero code"
+assert_not_contains "$out" "expected none" ":fail-on-output exit: no output-failure line"
+set +e; err="$(cd "$proj" && RITE_HOME="$home" "$RITE" warn 2>&1 >/dev/null)"; rc=$?; set -e
+[[ $rc -eq 0 ]] || fail ":fail-on-output stderr: expected exit 0 (got $rc)"
+pass ":fail-on-output stderr: ignored"
+assert_contains "$err" "warn" ":fail-on-output stderr: replayed to stderr"
+rm -rf "$proj" "$home"
+
+# ---------------------------------------------------------------------------
+echo "==> Scenario 16: :parallel steps"
+# A leftover is a live process whose whole command line is `sleep <n>`. Every
+# scenario uses its own <n>, and matching the full line keeps the check from
+# matching a shell whose own command line mentions it.
+leftover() { ps -eo args= | grep -Eq "^sleep $1\$"; }
+assert_no_leftover() {
+    if leftover "$1"; then
+        pkill -KILL -f "^sleep $1\$" 2>/dev/null || true
+        fail "$2"
+    fi
+    pass "$2"
+}
+proj="$(mktemp -d)"; home="$(mktemp -d)"
+mkdir -p "$proj/sub"
+cat > "$proj/rite.edn" <<'EOF'
+{:tasks {two      {:do {:parallel [{:sh "echo one; sleep 0.3; echo two" :label "api"}
+                                   {:sh "echo three >&2"}]}}
+         greet    {:args [{:name :who}] :do {:sh "echo hi-{{arg/who}}"}}
+         calls    {:args [{:name :who}]
+                   :do {:parallel [{:task [greet :arg/who]} {:sh "echo side"}]}}
+         fails    {:do [{:parallel [{:sh "sleep 1; exit 3" :label "bad"} {:sh "sleep 51"}]}
+                        {:sh "echo after"}]}
+         instant  {:do {:parallel [{:sh "exit 2"} {:sh "sleep 52"} {:sh "sleep 0.3; sleep 52"}
+                                   {:sh "sleep 52"}]}}
+         stubborn {:do {:parallel [{:sh "sleep 1; exit 3"} {:sh "trap '' TERM; sleep 53"}]}}
+         orphan   {:do {:parallel [{:sh "sleep 1; exit 3"}
+                                   {:sh "sh -c '(trap \"\" TERM; exec sleep 54) & sleep 55'"}]}}
+         forever  {:do {:parallel [{:sh "sleep 56"} {:sh "sleep 56"}]}}
+         lone     {:do {:parallel [{:sh "sleep 57"}]}}
+         envt     {:env {"FOO" "bar"} :do {:parallel [{:sh "echo a=$FOO"} {:task show}]}}
+         show     {:do {:sh "echo b=$FOO"}}
+         cwdt     {:cwd "sub" :do {:parallel [{:sh "echo own=$(basename $PWD)" :cwd "." :label "own"}
+                                              {:sh "echo task=$(basename $PWD)" :label "task"}]}}}}
+EOF
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" two 2>/dev/null)"
+assert_contains "$out" "[api]  one" ":parallel: lines carry padded prefixes"
+assert_contains "$out" "[api]  two" ":parallel: every line is prefixed"
+assert_contains "$out" "[echo] three" ":parallel: stderr is prefixed too"
+err="$(cd "$proj" && RITE_HOME="$home" "$RITE" two 2>&1 >/dev/null)"
+assert_contains "$err" "$ parallel: api, echo" ":parallel: step echo lists labels"
+assert_contains "$err" "  [api] $ echo one; sleep 0.3; echo two" ":parallel: one echo line per child"
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" calls bob 2>/dev/null)"
+assert_contains "$out" "[greet] hi-bob" ":parallel: a :task child runs the task with its arg"
+assert_contains "$out" "[echo]  side" ":parallel: alongside an :sh child"
+err="$(cd "$proj" && RITE_HOME="$home" "$RITE" --verbose calls bob 2>&1 >/dev/null)"
+assert_contains "$err" "  [greet] $ rite greet bob" ":parallel: a :task child echoes as a rite call"
+assert_contains "$err" "' 'greet' 'bob'" ":parallel: --verbose shows the :task child's subprocess"
+start=$SECONDS
+set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" fails 2>&1)"; rc=$?; set -e
+[[ $rc -eq 3 ]] || fail ":parallel failure: expected exit 3 (got $rc)"
+pass ":parallel failure: exits with the failing child's code"
+(( SECONDS - start < 5 )) || fail ":parallel failure: took $((SECONDS - start))s"
+pass ":parallel failure: stops the sibling quickly"
+assert_contains "$out" "=> bad exited with 3; stopping the others" ":parallel failure: stop line"
+assert_contains "$out" "=> Task fails failed: step 1 exited with 3" ":parallel failure: task failure line"
+assert_not_contains "$out" "after" ":parallel failure: later steps skipped"
+assert_no_leftover 51 ":parallel failure: no leftover sibling"
+start=$SECONDS
+set +e; (cd "$proj" && RITE_HOME="$home" "$RITE" instant >/dev/null 2>&1); rc=$?; set -e
+[[ $rc -eq 2 ]] || fail ":parallel instant failure: expected exit 2 (got $rc)"
+(( SECONDS - start < 5 )) || fail ":parallel instant failure: took $((SECONDS - start))s"
+pass ":parallel instant failure: exit 2, quickly"
+assert_no_leftover 52 ":parallel instant failure: the barrier lets the stop reach every sibling"
+start=$SECONDS
+set +e; (cd "$proj" && RITE_HOME="$home" "$RITE" stubborn >/dev/null 2>&1); rc=$?; set -e
+[[ $rc -eq 3 ]] || fail ":parallel TERM-ignoring child: expected exit 3 (got $rc)"
+(( SECONDS - start <= 8 )) || fail ":parallel TERM-ignoring child: took $((SECONDS - start))s"
+pass ":parallel TERM-ignoring child: KILLed after the bound"
+assert_no_leftover 53 ":parallel TERM-ignoring child: no leftover"
+start=$SECONDS
+set +e; (cd "$proj" && RITE_HOME="$home" "$RITE" orphan >/dev/null 2>&1); rc=$?; set -e
+[[ $rc -eq 3 ]] || fail ":parallel orphaned grandchild: expected exit 3 (got $rc)"
+(( SECONDS - start <= 8 )) || fail ":parallel orphaned grandchild: took $((SECONDS - start))s"
+pass ":parallel orphaned grandchild: stopped within the bound"
+assert_no_leftover 54 ":parallel orphaned grandchild: KILLed from the snapshot"
+assert_no_leftover 55 ":parallel orphaned grandchild: its parent is gone too"
+# Ctrl-C: under set -m, bash (unlike dash) gives a background job its own
+# process group even without a tty, so signalling the group imitates Ctrl-C.
+set -m
+(cd "$proj" && RITE_HOME="$home" exec "$RITE" forever >/dev/null 2>&1) &
+job=$!
+set +m
+sleep 1
+kill -INT -- "-$job"
+set +e; wait "$job"; rc=$?; set -e
+[[ $rc -eq 130 ]] || fail ":parallel SIGINT: expected exit 130 (got $rc)"
+pass ":parallel SIGINT: exits 130"
+sleep 1
+assert_no_leftover 56 ":parallel SIGINT: no leftovers"
+# rite alone killed: the supervisor's watchdog stops the children.
+(cd "$proj" && RITE_HOME="$home" exec "$RITE" lone >/dev/null 2>&1) &
+rpid=$!
+sleep 1
+kill -TERM "$rpid"
+set +e; wait "$rpid"; set -e
+sleep 3
+assert_no_leftover 57 ":parallel SIGTERM to rite alone: the watchdog stops the children"
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" envt 2>/dev/null)"
+assert_contains "$out" "a=bar" ":parallel :env: reaches an :sh child"
+assert_contains "$out" "b=bar" ":parallel :env: reaches a :task child"
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" cwdt 2>/dev/null)"
+root_base="$(basename "$proj")"
+assert_contains "$out" "[own]  own=$root_base" ":parallel :cwd: an :sh child's own :cwd wins"
+assert_contains "$out" "[task] task=sub" ":parallel :cwd: otherwise the task's :cwd"
+cat > "$proj/rite.edn" <<'EOF'
+{:tasks {a {:do {:parallel [{:sh "echo x"} {:task a}]}}}}
+EOF
+set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" a 2>&1)"; rc=$?; set -e
+[[ $rc -eq 1 ]] || fail ":parallel cycle: expected exit 1 (got $rc)"
+assert_contains "$out" "dependency cycle: a -> a" ":parallel cycle: load-time error"
+rm -rf "$proj" "$home"
+
+# ---------------------------------------------------------------------------
 echo
 echo "All e2e scenarios passed ($PASS_COUNT assertions)."
