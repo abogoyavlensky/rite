@@ -132,10 +132,25 @@ Each step has exactly one action key:
   [`:run` steps](#run-steps-the-embedded-runtime)).
 - `{:task fmt}` or `{:task [notify "prod"]}` runs another task (see
   [`:task` steps](#task-steps)).
+- `{:parallel [{:sh "..."} {:task dev-web}]}` runs several commands at once
+  (see [`:parallel` steps](#parallel-steps)).
 
 A step value is a string or a vector. A vector `:sh` value joins its items with
 spaces after substitution; a vector `:run` value passes its items through as the
 script's argv.
+
+A `:sh` string may span several lines; `sh -c` runs it as one script. The step
+line then shows only the first line and a count of the rest, such as
+`$ if ! git diff --quiet; then … (+3 lines)`. `--verbose` prints the whole
+script.
+
+```edn
+release-check {:do {:sh "
+  if ! git diff --quiet; then
+    echo 'uncommitted changes' >&2
+    exit 1
+  fi"}}
+```
 
 #### Placeholders
 
@@ -175,9 +190,39 @@ test {:env {"NO_COLOR" "1"}
       :do {:sh "npm test"}}
 ```
 
+A `:sh` or `:run` step can set its own `:cwd`, also relative to the project
+root. It replaces the task's directory for that step only; the next step runs
+from the task's directory again. A `:task` step takes no `:cwd`: set it on the
+called task instead.
+
+```edn
+deps {:do [{:sh "go mod download"}
+           {:sh "npm ci" :cwd "web"}]}
+```
+
 Both keys apply to the task's own steps, not to the tasks in its `:depends`.
 A task called by a [`:task` step](#task-steps) inherits them. `--verbose`
 prints the resolved `:env` and the `cd` that applies `:cwd`.
+
+#### `:fail-on-output`
+
+`:fail-on-output true` on a `:sh` step fails the step when the command prints
+anything to stdout, even if it exits 0. Use it for checks whose findings are
+their output, such as "list untracked generated files":
+
+```edn
+gen-check {:do [{:sh "git diff --exit-code -- gen"}
+                {:sh "git ls-files --others --exclude-standard -- gen"
+                 :fail-on-output true}]}
+```
+
+A command that exits non-zero fails with its own code. One that exits 0 but
+prints to stdout fails with 1, after `=> step printed output; expected none`.
+Output on stderr does not count, so a tool can still warn.
+
+The step's output is buffered: rite prints it when the command finishes, stdout
+first, then stderr. Keep it for quick checks. The key is rejected on `:run`,
+`:task`, and `:parallel` steps.
 
 #### `:args`
 
@@ -256,6 +301,60 @@ entry: the task must be defined, forwarded placeholders must name a declared
 arg or defined var, and literal arguments must match the task's `:args`. The
 cycle check covers `:depends` and `:task` together, so a task can't call itself
 directly or through another task.
+
+#### `:parallel` steps
+
+A `{:parallel [...]}` step runs its children at the same time and waits for all
+of them. Each child is one of:
+
+- `{:sh "<command>"}`, with an optional `:cwd` and `:label`;
+- `{:task <entry>}`, with an optional `:label`. The entry has the same shape as
+  a `:task` step's value: `dev-api` or `[serve "8080"]`.
+
+```edn
+dev {:doc "Run the API and the Vite dev server together"
+     :do {:parallel [{:task dev-api}
+                     {:sh "npm run dev" :cwd "web" :label "web"}]}}
+```
+
+Every output line, stdout and stderr alike, starts with the child's label:
+
+```
+[dev-api] listening on :8080
+[web]     VITE ready in 312 ms
+```
+
+A `:task` child's label defaults to its task name and a `:sh` child's to the
+first word of its command (`go`, `npm`). A repeated default gets a suffix
+(`go`, `go-2`); a repeated explicit `:label` is an error.
+
+How the step ends:
+
+- A child that exits 0 stops nothing. The step finishes when every child has
+  finished, so `:parallel` works for "build both at once" as well as for
+  long-running servers.
+- The first child to exit non-zero stops the others. rite prints
+  `=> <label> exited with <code>; stopping the others` and the step fails with
+  that code.
+- Ctrl-C or SIGTERM stops every child. The step exits 130 or 143.
+
+To stop a child, rite sends TERM to the child's process tree, waits up to 5
+seconds, then sends KILL to whatever is left. A process that leaves its tree
+(a daemon, or a command that calls `setsid`) cannot be stopped this way.
+
+Children read no stdin, so a child cannot prompt. The task's `:env` reaches
+every child. A `:sh` child runs from its own `:cwd`, otherwise from the task's
+directory. A `:task` child runs `rite <task> args` as a separate process from
+the project root, so its own `:cwd` and `:env` apply as usual. Its arguments
+are resolved like a `:task` step's. `:parallel` children cannot be `:run` steps
+or nested `:parallel` steps, and the step itself takes no `:cwd`.
+
+`:parallel` runs its children under a small POSIX `sh` script, which needs
+`mkfifo`, `mktemp`, `ps`, and `kill`; `pgrep` is used for the process-tree
+walk when present. These are standard on Linux and macOS.
+
+At load time a `:task` child is checked like a `:task` step, and the cycle check
+covers it, so a task cannot start itself in parallel.
 
 #### `:deps` and `:paths`
 
@@ -365,7 +464,9 @@ lgx check                # fmt, lint, unit tests, and e2e
 
 Develop the CLI against the built binary (`lgx build && ./bin/rite <task>`).
 Running the CLI from source through `lgx run` does not dispatch, because lgx puts
-its own flags before the entry script.
+its own flags before the entry script. A `:task` child of a `:parallel` step
+also needs the built binary: it re-runs rite's own executable, which from
+source is `lg`.
 
 ### Releasing
 

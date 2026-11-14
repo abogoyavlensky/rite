@@ -343,14 +343,14 @@ The script lives as one string constant in `src/rite/parallel.lg`. It is the onl
 **Files:**
 - Modify: `README.md`
 
-- [ ] **Step 1: Document**
+- [x] **Step 1: Document**
   Use /writing-clearly.
   - In `#### :do steps`, list `:parallel` as an action key and mention multi-line `:sh` strings with a short example.
   - In `#### :env and :cwd`, cover step-level `:cwd` and its precedence.
   - Add `#### :fail-on-output`, including the buffered-output note.
   - Add `#### :parallel steps`: shape, labels, the stop rules, no stdin, env and cwd, the `:task` subprocess, and the platform requirements.
   - In `## Development`, note that `:task` children need the built bundle.
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
   `git commit -m "docs: document step :cwd, :fail-on-output and :parallel"`
 
 ### Task 9: macOS CI job
