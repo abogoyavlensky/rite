@@ -680,10 +680,12 @@ cat > "$proj/scripts/show.lg" <<'EOF'
 (println "show.lg found:" (file-exists? "show.lg"))
 EOF
 cat > "$proj/rite.edn" <<'EOF'
-{:tasks {steps {:cwd "." :do [{:sh "pwd"} {:sh "pwd" :cwd "sub"} {:sh "pwd"}]}
-         runs  {:do [{:run ["show.lg"] :cwd "scripts"} {:sh "pwd"}]}
-         over  {:cwd "sub" :do [{:sh "pwd" :cwd "scripts"} {:sh "pwd"}]}}}
+{:tasks {steps {:cwd "." :do [{:sh "pwd -P"} {:sh "pwd -P" :cwd "sub"} {:sh "pwd -P"}]}
+         runs  {:do [{:run ["show.lg"] :cwd "scripts"} {:sh "pwd -P"}]}
+         over  {:cwd "sub" :do [{:sh "pwd -P" :cwd "scripts"} {:sh "pwd -P"}]}}}
 EOF
+# Physical paths on both sides: macOS mktemp dirs sit under /var, a symlink to
+# /private/var, and rite keeps the logical path it was started from.
 root="$(cd "$proj" && pwd -P)"
 out="$(cd "$proj" && RITE_HOME="$home" "$RITE" steps 2>/dev/null)"
 assert_eq "$out" "$root
