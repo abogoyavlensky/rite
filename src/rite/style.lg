@@ -84,3 +84,10 @@
   [name step-number exit]
   (purple (str "=> Task " name " failed: step " step-number " exited with "
                exit)))
+
+(defn output-failure-line
+  "Purple `=> step printed output; expected none` line, printed when a
+   :fail-on-output step exits 0 but writes to stdout. Callers add the leading
+   blank line."
+  []
+  (purple "=> step printed output; expected none"))

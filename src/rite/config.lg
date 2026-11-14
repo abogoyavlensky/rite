@@ -179,15 +179,25 @@
   (when (not= 1 (count (filter #(contains? step %) [:sh :run :task])))
     "must contain exactly one of :sh, :run, :task"))
 
+(defn- boolean-errors [v]
+  (when-not (boolean? v)
+    (str "must be true or false, got " (pr-str v))))
+
 (defn- step-key-errors
   "Step cross-key rules, run once the step has exactly one action: :cwd
-   belongs to :sh and :run steps only. A called task's cwd is already its own
-   :cwd or the caller's, so a :task step takes none."
+   belongs to :sh and :run steps only (a called task's cwd is already its own
+   :cwd or the caller's, so a :task step takes none), and :fail-on-output to
+   :sh steps only."
   [step]
-  (when (and (contains? step :task) (contains? step :cwd))
-    {:path [:cwd]
-     :msg (str ":cwd is not allowed on a :task step; set :cwd on the called "
-               "task")}))
+  (vec (concat
+         (when (and (contains? step :task) (contains? step :cwd))
+           [{:path [:cwd]
+             :msg (str ":cwd is not allowed on a :task step; set :cwd on the "
+                       "called task")}])
+         (when (and (contains? step :fail-on-output)
+                    (not (contains? step :sh)))
+           [{:path [:fail-on-output]
+             :msg ":fail-on-output is only allowed on a :sh step"}]))))
 
 (def ^:private step-schema
   [:and
@@ -195,7 +205,8 @@
     [:sh {:optional true} [:fn action-value-errors]]
     [:run {:optional true} [:fn action-value-errors]]
     [:task {:optional true} [:fn depends-entry-errors]]
-    [:cwd {:optional true} rel-path-schema]]
+    [:cwd {:optional true} rel-path-schema]
+    [:fail-on-output {:optional true} [:fn boolean-errors]]]
    [:fn exactly-one-action-errors]
    [:fn step-key-errors]])
 

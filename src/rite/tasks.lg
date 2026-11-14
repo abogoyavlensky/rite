@@ -101,7 +101,10 @@
 
       :else cmd)))
 
-(defn- run-sh-step! [value bindings cwd verbose?]
+(defn- prepare-sh-step!
+  "Echo a :sh step (and, with --verbose, its full `sh -c` line) and return the
+   command to hand to `sh -c`, wrapped in a cd when `cwd` is set."
+  [value bindings cwd verbose?]
   (let [cmd (sh-command value bindings)
         full (if cwd (with-cwd cmd cwd) cmd)]
     ;; The step line shows the task's own command, compacted when it spans
@@ -110,7 +113,28 @@
     (write! *err* (str "\n" (style/step-line (display-command cmd)) "\n"))
     (when verbose?
       (write! *err* (str "+ sh -c " full "\n")))
-    (os/exec* "sh" "-c" full)))
+    full))
+
+(defn- run-sh-step! [value bindings cwd verbose?]
+  (os/exec* "sh" "-c" (prepare-sh-step! value bindings cwd verbose?)))
+
+(defn- run-checked-sh-step!
+  "Run a :fail-on-output :sh step. Its output is buffered (os/sh), then
+   replayed: stdout to *out*, stderr to *err*. A non-zero exit is returned as
+   is; otherwise any non-blank stdout fails the step with 1. Only stdout
+   counts, so the command may still warn on stderr."
+  [value bindings cwd verbose?]
+  (let [r (os/sh "sh" "-c" (prepare-sh-step! value bindings cwd verbose?))]
+    (write! *out* (:out r))
+    (write! *err* (:err r))
+    (cond
+      (not (zero? (:exit r))) (:exit r)
+
+      (not (str/blank? (:out r)))
+      (do (write! *err* (str "\n" (style/output-failure-line) "\n"))
+          1)
+
+      :else 0)))
 
 (defn- run-run-step! [value bindings exe sp-value cwd verbose?]
   (let [argv (run-argv value bindings)]
@@ -119,7 +143,10 @@
 
 (defn- run-step! [step bindings exe sp-value cwd verbose?]
   (cond
-    (contains? step :sh) (run-sh-step! (:sh step) bindings cwd verbose?)
+    (contains? step :sh)
+    (if (:fail-on-output step)
+      (run-checked-sh-step! (:sh step) bindings cwd verbose?)
+      (run-sh-step! (:sh step) bindings cwd verbose?))
     (contains? step :run)
     (run-run-step! (:run step) bindings exe sp-value cwd verbose?)
     :else (throw (ex-info "step has no action key" {:step step}))))

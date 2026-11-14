@@ -725,5 +725,33 @@ assert_contains "$err" "echo three" "multi-line :sh: --verbose shows the last li
 rm -rf "$proj" "$home"
 
 # ---------------------------------------------------------------------------
+echo "==> Scenario 15: :fail-on-output"
+proj="$(mktemp -d)"; home="$(mktemp -d)"
+cat > "$proj/rite.edn" <<'EOF'
+{:tasks {quiet  {:do [{:sh "printf ''" :fail-on-output true} {:sh "echo after"}]}
+         stale  {:do [{:sh "echo stale" :fail-on-output true} {:sh "echo after"}]}
+         broken {:do [{:sh "exit 4" :fail-on-output true}]}
+         warn   {:do [{:sh "echo warn >&2" :fail-on-output true}]}}}
+EOF
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" quiet 2>/dev/null)"
+assert_eq "$out" "after" ":fail-on-output: silence passes"
+set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" stale 2>&1)"; rc=$?; set -e
+[[ $rc -eq 1 ]] || fail ":fail-on-output stdout: expected exit 1 (got $rc)"
+pass ":fail-on-output stdout: exits 1"
+assert_contains "$out" "stale" ":fail-on-output stdout: the output is shown"
+assert_contains "$out" "=> step printed output; expected none" ":fail-on-output stdout: output-failure line"
+assert_contains "$out" "=> Task stale failed: step 1 exited with 1" ":fail-on-output stdout: task failure line"
+assert_not_contains "$out" "after" ":fail-on-output stdout: later steps skipped"
+set +e; out="$(cd "$proj" && RITE_HOME="$home" "$RITE" broken 2>&1)"; rc=$?; set -e
+[[ $rc -eq 4 ]] || fail ":fail-on-output exit: expected exit 4 (got $rc)"
+pass ":fail-on-output exit: keeps the command's non-zero code"
+assert_not_contains "$out" "expected none" ":fail-on-output exit: no output-failure line"
+set +e; err="$(cd "$proj" && RITE_HOME="$home" "$RITE" warn 2>&1 >/dev/null)"; rc=$?; set -e
+[[ $rc -eq 0 ]] || fail ":fail-on-output stderr: expected exit 0 (got $rc)"
+pass ":fail-on-output stderr: ignored"
+assert_contains "$err" "warn" ":fail-on-output stderr: replayed to stderr"
+rm -rf "$proj" "$home"
+
+# ---------------------------------------------------------------------------
 echo
 echo "All e2e scenarios passed ($PASS_COUNT assertions)."

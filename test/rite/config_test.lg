@@ -276,7 +276,7 @@
 
 (deftest load-rejects-step-with-unknown-key
   (is (= {:errors [{:path [:tasks 'fmt :do 0]
-                    :msg "unknown key :env (allowed: :sh, :run, :task, :cwd)"}]}
+                    :msg "unknown key :env (allowed: :sh, :run, :task, :cwd, :fail-on-output)"}]}
          (load-cfg {:tasks {'fmt {:do [{:sh "echo hi"
                                         :env {"FOO" "1"}}]}}}))))
 
@@ -504,7 +504,7 @@
   (is (= {:errors [{:path [:vars :version]
                     :msg "must be a string or number, got [:x]"}
                    {:path [:tasks 'lint :do 0]
-                    :msg "unknown key :shh (allowed: :sh, :run, :task, :cwd)"}]}
+                    :msg "unknown key :shh (allowed: :sh, :run, :task, :cwd, :fail-on-output)"}]}
          (load-cfg {:vars {:version [:x]}
                     :tasks {'lint {:do [{:shh "x"}]}}}))))
 
@@ -909,3 +909,31 @@
          (load-cfg {:tasks {'fmt {:do {:sh "echo fmt"}}
                             't {:do [{:task 'fmt
                                       :cwd "web"}]}}}))))
+
+;; ---------------------------------------------------------------------------
+;; load-config: :fail-on-output
+;; ---------------------------------------------------------------------------
+
+(deftest load-accepts-fail-on-output
+  (let [cfg {:tasks {'t {:do [{:sh "x"
+                               :fail-on-output true}
+                              {:sh "y"
+                               :fail-on-output false}]}}}]
+    (is (= {:cfg cfg} (load-cfg cfg)))))
+
+(deftest load-rejects-non-boolean-fail-on-output
+  (is (= {:errors [{:path [:tasks 't :do 0 :fail-on-output]
+                    :msg "must be true or false, got \"yes\""}]}
+         (load-cfg {:tasks {'t {:do [{:sh "x"
+                                      :fail-on-output "yes"}]}}}))))
+
+(deftest load-rejects-fail-on-output-off-sh
+  (is (= {:errors [{:path [:tasks 't :do 0 :fail-on-output]
+                    :msg ":fail-on-output is only allowed on a :sh step"}]}
+         (load-cfg {:tasks {'t {:do [{:run "x.lg"
+                                      :fail-on-output true}]}}})))
+  (is (= {:errors [{:path [:tasks 't :do :fail-on-output]
+                    :msg ":fail-on-output is only allowed on a :sh step"}]}
+         (load-cfg {:tasks {'fmt {:do {:sh "echo fmt"}}
+                            't {:do {:task 'fmt
+                                     :fail-on-output true}}}}))))
