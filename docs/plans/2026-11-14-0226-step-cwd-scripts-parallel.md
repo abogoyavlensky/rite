@@ -1,6 +1,6 @@
 # Step `:cwd`, Readable Script Steps and `:parallel` Implementation Plan
 
-**Status: completed (2026-11-14). The macOS CI run awaits maintainer confirmation.**
+**Status: completed (2026-11-14), except Task 9 Step 2: the macOS job has not run yet.**
 
 > **For agentic workers:** Use executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -370,7 +370,7 @@ The script lives as one string constant in `src/rite/parallel.lg`. It is the onl
 - [x] **Step 3: Commit**
   `git commit -m "ci: run checks on macOS"`
 
-> Deviation: the macOS job is a `matrix.os` entry (`ubuntu-latest`, `macos-latest`, `fail-fast: false`) on the existing job, so `release.yml`'s `workflow_call` runs both. `actionlint` 1.7.12 (with shellcheck 0.11.0) reports nothing for `checks.yml`; its only finding is an existing info-level SC2035 in `release.yml`. Step 2's GitHub run is pending: the branch is pushed, and the maintainer still has to confirm that both jobs pass.
+> Deviation: the macOS job is a `matrix.os` entry (`ubuntu-latest`, `macos-latest`, `fail-fast: false`) on the existing job, so `release.yml`'s `workflow_call` runs both. `actionlint` 1.7.12 (with shellcheck 0.11.0) reports nothing for `checks.yml`; its only finding is an existing info-level SC2035 in `release.yml`. Step 2 is still open. `checks.yml` runs only for pull requests and pushes to `master`, so pushing the feature branch started no run, and the macOS job has not run. Opening a PR against `master` runs both matrix jobs.
 
 ---
 
@@ -385,7 +385,7 @@ The script lives as one string constant in `src/rite/parallel.lg`. It is the onl
 - README sections;
 - a macOS CI matrix entry.
 
-Every task passed a codex review. `lgx check` passes: 376 unit tests and 167 e2e assertions. An end-to-end run of a kopi-style `rite.edn` (`deps`, `gen-check`, `dev`) behaved as designed.
+Codex reviewed every task. One must-fix (mawk buffering) was fixed in `5c0c50e`, and one P2 (task names ending in `.lg`) was backlogged because it predates this work. `lgx check` passes: 376 unit tests and 167 e2e assertions. An end-to-end run of a kopi-style `rite.edn` (`deps`, `gen-check`, `dev`) behaved as designed.
 
 **Issues encountered**
 
