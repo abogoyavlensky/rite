@@ -265,18 +265,18 @@
 
 (deftest load-rejects-step-with-multiple-action-keys
   (is (= {:errors [{:path [:tasks 'fmt :do 0]
-                    :msg "must contain exactly one of :sh, :run, :task"}]}
+                    :msg "must contain exactly one of :sh, :run, :task, :parallel"}]}
          (load-cfg {:tasks {'fmt {:do [{:sh "echo a"
                                         :run "scripts/foo.lg"}]}}}))))
 
 (deftest load-rejects-step-with-no-action-key
   (is (= {:errors [{:path [:tasks 'fmt :do 0]
-                    :msg "must contain exactly one of :sh, :run, :task"}]}
+                    :msg "must contain exactly one of :sh, :run, :task, :parallel"}]}
          (load-cfg {:tasks {'fmt {:do [{}]}}}))))
 
 (deftest load-rejects-step-with-unknown-key
   (is (= {:errors [{:path [:tasks 'fmt :do 0]
-                    :msg "unknown key :env (allowed: :sh, :run, :task, :cwd, :fail-on-output)"}]}
+                    :msg "unknown key :env (allowed: :sh, :run, :task, :parallel, :cwd, :fail-on-output)"}]}
          (load-cfg {:tasks {'fmt {:do [{:sh "echo hi"
                                         :env {"FOO" "1"}}]}}}))))
 
@@ -504,7 +504,7 @@
   (is (= {:errors [{:path [:vars :version]
                     :msg "must be a string or number, got [:x]"}
                    {:path [:tasks 'lint :do 0]
-                    :msg "unknown key :shh (allowed: :sh, :run, :task, :cwd, :fail-on-output)"}]}
+                    :msg "unknown key :shh (allowed: :sh, :run, :task, :parallel, :cwd, :fail-on-output)"}]}
          (load-cfg {:vars {:version [:x]}
                     :tasks {'lint {:do [{:shh "x"}]}}}))))
 
@@ -686,7 +686,7 @@
 
 (deftest load-rejects-task-step-with-another-action
   (is (= {:errors [{:path [:tasks 'ci :do 0]
-                    :msg "must contain exactly one of :sh, :run, :task"}]}
+                    :msg "must contain exactly one of :sh, :run, :task, :parallel"}]}
          (load-ci {:do [{:task 'fmt
                          :sh "echo hi"}]}))))
 
@@ -937,3 +937,122 @@
          (load-cfg {:tasks {'fmt {:do {:sh "echo fmt"}}
                             't {:do {:task 'fmt
                                      :fail-on-output true}}}}))))
+
+;; ---------------------------------------------------------------------------
+;; load-config: :parallel steps
+;; ---------------------------------------------------------------------------
+
+(def ^:private par-tasks
+  {'fmt {:do {:sh "echo fmt"}}
+   'dep {:args [{:name :env}]
+         :do {:sh "echo dep"}}})
+
+(defn- load-par [step]
+  (load-cfg {:tasks (assoc par-tasks 'ci {:do [step]})}))
+
+(deftest load-accepts-parallel-step
+  (is (contains? (load-par {:parallel [{:sh "a"}
+                                       {:task 'fmt}
+                                       {:sh "b"
+                                        :cwd "web"
+                                        :label "web"}]})
+                 :cfg))
+  (is (contains? (load-cfg {:tasks (assoc par-tasks 'ci
+                                          {:do {:parallel [{:sh "a"}]}})})
+                 :cfg)))
+
+(deftest load-rejects-bad-parallel-shape
+  (is (= {:errors [{:path [:tasks 'ci :do 0 :parallel]
+                    :msg "must contain at least 1 element"}]}
+         (load-par {:parallel []})))
+  (is (= {:errors [{:path [:tasks 'ci :do 0 :parallel]
+                    :msg "must be a vector, got {:sh \"a\"}"}]}
+         (load-par {:parallel {:sh "a"}}))))
+
+(deftest load-rejects-bad-parallel-child
+  (is (= {:errors [{:path [:tasks 'ci :do 0 :parallel 0]
+                    :msg ":run is not allowed in :parallel; use :sh or :task"}]}
+         (load-par {:parallel [{:run "x.lg"}]})))
+  (is (= {:errors [{:path [:tasks 'ci :do 0 :parallel 1]
+                    :msg ":parallel steps cannot be nested"}]}
+         (load-par {:parallel [{:sh "a"}
+                               {:parallel [{:sh "b"}]}]})))
+  (is (= {:errors [{:path [:tasks 'ci :do 0 :parallel 0]
+                    :msg "must contain exactly one of :sh, :task"}]}
+         (load-par {:parallel [{:label "x"}]})))
+  (is (= {:errors [{:path [:tasks 'ci :do 0 :parallel 0]
+                    :msg "must contain exactly one of :sh, :task"}]}
+         (load-par {:parallel [{:sh "a"
+                                :task 'fmt}]})))
+  (is (= {:errors [{:path [:tasks 'ci :do 0 :parallel 0 :label]
+                    :msg "must be non-blank"}]}
+         (load-par {:parallel [{:sh "a"
+                                :label " "}]})))
+  (is (= {:errors [{:path [:tasks 'ci :do 0 :parallel 0 :cwd]
+                    :msg (str ":cwd is not allowed on a :task child; set :cwd "
+                              "on the called task")}]}
+         (load-par {:parallel [{:task 'fmt
+                                :cwd "web"}]})))
+  (is (= {:errors [{:path [:tasks 'ci :do 0 :parallel 0]
+                    :msg "must be a map, got \"a\""}]}
+         (load-par {:parallel ["a"]}))))
+
+(deftest load-rejects-duplicate-parallel-labels
+  (is (= {:errors [{:path [:tasks 'ci :do 0 :parallel 2 :label]
+                    :msg "duplicate label \"web\""}]}
+         (load-par {:parallel [{:sh "a"
+                                :label "web"}
+                               {:sh "b"}
+                               {:task 'fmt
+                                :label "web"}]}))))
+
+(deftest load-rejects-parallel-with-other-keys
+  (is (= {:errors [{:path [:tasks 'ci :do 0]
+                    :msg "must contain exactly one of :sh, :run, :task, :parallel"}]}
+         (load-par {:parallel [{:sh "a"}]
+                    :sh "b"})))
+  (is (= {:errors [{:path [:tasks 'ci :do 0 :cwd]
+                    :msg (str ":cwd is not allowed on a :parallel step; set "
+                              ":cwd on its :sh children")}]}
+         (load-par {:parallel [{:sh "a"}]
+                    :cwd "web"})))
+  (is (= {:errors [{:path [:tasks 'ci :do 0 :fail-on-output]
+                    :msg ":fail-on-output is only allowed on a :sh step"}]}
+         (load-par {:parallel [{:sh "a"}]
+                    :fail-on-output true}))))
+
+(deftest load-rejects-parallel-child-refs
+  (is (= {:errors [{:path [:tasks 'ci :do 0 :parallel 1 :task]
+                    :msg "calls undefined task nope (defined: ci, dep, fmt)"}]}
+         (load-par {:parallel [{:sh "a"}
+                               {:task 'nope}]})))
+  (is (= {:errors [{:path [:tasks 'ci :do :parallel 0 :task]
+                    :msg "calls undefined task nope (defined: ci, dep, fmt)"}]}
+         (load-cfg {:tasks (assoc par-tasks 'ci
+                                  {:do {:parallel [{:task 'nope}]}})})))
+  (is (= {:errors [{:path [:tasks 'ci :do 0 :parallel 0 :task]
+                    :msg "forwards :arg/x but task ci declares no args"}]}
+         (load-par {:parallel [{:task ['dep :arg/x]}]})))
+  (is (= {:errors [{:path [:tasks 'ci :do 0 :parallel 1 :sh]
+                    :msg "placeholder :arg/x used but no :args declared"}]}
+         (load-par {:parallel [{:sh "a"}
+                               {:sh "echo {{arg/x}}"}]})))
+  (is (= {:errors [{:path [:tasks 'ci :do :parallel 0 :sh 1]
+                    :msg "placeholder :arg/x used but no :args declared"}]}
+         (load-cfg {:tasks (assoc par-tasks 'ci
+                                  {:do {:parallel [{:sh ["echo" :arg/x]}]}})}))))
+
+(deftest load-rejects-cycle-through-parallel
+  (is (= {:errors [{:path [:tasks 'a]
+                    :msg "dependency cycle: a -> a"}]}
+         (load-cfg {:tasks {'a {:do {:parallel [{:task 'a}]}}}})))
+  (is (= {:errors [{:path [:tasks 'a]
+                    :msg "dependency cycle: a -> a"}]}
+         (load-cfg {:tasks {'a {:do [{:sh "x"}
+                                     {:parallel [{:sh "y"}
+                                                 {:task 'a}]}]}}})))
+  (let [r (load-cfg {:tasks {'a {:do [{:parallel [{:task 'b}]}]}
+                             'b {:do {:parallel [{:sh "y"}
+                                                 {:task 'a}]}}}})]
+    (is (= 1 (count (:errors r))))
+    (is (str/includes? (:msg (first (:errors r))) "dependency cycle"))))
