@@ -1,5 +1,7 @@
 # Step `:cwd`, Readable Script Steps and `:parallel` Implementation Plan
 
+**Status: completed (2026-11-14). The macOS CI run awaits maintainer confirmation.**
+
 > **For agentic workers:** Use executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Three step-level features found while writing the kopi `rite.edn`: a per-step `:cwd`, readable multi-line `:sh` steps with a compact echo and a `:fail-on-output` check, and a `:parallel` step that runs long-lived processes together with prefixed output and a shared stop.
@@ -369,3 +371,41 @@ The script lives as one string constant in `src/rite/parallel.lg`. It is the onl
   `git commit -m "ci: run checks on macOS"`
 
 > Deviation: the macOS job is a `matrix.os` entry (`ubuntu-latest`, `macos-latest`, `fail-fast: false`) on the existing job, so `release.yml`'s `workflow_call` runs both. `actionlint` 1.7.12 (with shellcheck 0.11.0) reports nothing for `checks.yml`; its only finding is an existing info-level SC2035 in `release.yml`. Step 2's GitHub run is pending: the branch is pushed, and the maintainer still has to confirm that both jobs pass.
+
+---
+
+## Completion summary
+
+**Implemented** (branch `feat/step-cwd-scripts-parallel`):
+
+- per-step `:cwd` on `:sh` and `:run` steps;
+- compact `$` echo for multi-line `:sh` steps;
+- `:fail-on-output` on `:sh` steps;
+- `:parallel` steps with `:sh` and `:task` children, run by a POSIX `sh` supervisor that provides prefixed streaming output, stop on first failure, the startup barrier, a TERM, 5 s, KILL stop over a snapshot of each process tree, SIGINT/SIGTERM handling and a parent watchdog;
+- README sections;
+- a macOS CI matrix entry.
+
+Every task passed a codex review. `lgx check` passes: 376 unit tests and 167 e2e assertions. An end-to-end run of a kopi-style `rite.edn` (`deps`, `gen-check`, `dev`) behaved as designed.
+
+**Issues encountered**
+
+- The `lgx` first on PATH (0.5.4) cannot load this repo's test harness, so every command ran through `mise exec --`.
+- Codex must-fix after Task 6: mawk block-buffers its piped input, so the awk prefixer did not stream. Fixed in `5c0c50e` with a shell `read` loop.
+- Codex advisory after Task 7: a task named like `build.lg` is mistaken for dev mode when re-executed. The bug predates this work, so it was backlogged (`docs/backlog/task-name-ending-in-lg.md`).
+- Harness lesson: SIGINT tests must signal a `set -m` job's process group. A background job without job control starts with INT ignored, and sh cannot trap a signal that was ignored on entry.
+
+**Deviations**, each also noted under its task:
+
+1. The "allowed keys" and "exactly one of" messages changed, and existing tests were updated.
+2. `display-command` also trims a lone line padded with newlines.
+3. Child validation has its own messages for `:run` children, nested `:parallel`, and `:cwd` on a `:task` child.
+4. The supervisor's argv is `<stop-open> <stop-close>` followed by a (prefix, label, command) triple per child, not pairs. `supervisor-argv` takes `[{:prefix :label :command}]` and `color?`.
+5. The watchdog compares `ps -o ppid=` with the original `$PPID` instead of using `kill -0 $PPID`, which a zombie parent still answers.
+6. The prefixer is a `while read -r` loop, not awk.
+7. On exit the supervisor gives the prefixers up to 2 s to drain.
+8. `run-parallel-step!` lives in `tasks.lg` to avoid a require cycle. There is no `style/parallel-stop-line`; `style/purple-codes` and `style/label` were added instead, and `plan/resolve-entry` was made public.
+9. Exe resolution also covers `:parallel` `:task` children.
+10. E2E leak checks match a whole `ps` line instead of using `pgrep -f`.
+11. macOS runs as a matrix entry on the existing job.
+
+**What the plan could have specified better:** it should have named the awk implementation as a risk. The spike tested dash and bash but not mawk, Ubuntu's default awk, and that was where the plan broke. It should also have checked module dependencies when assigning `run-parallel-step!` to `rite.parallel`, since that placement creates a require cycle with `rite.tasks`.
