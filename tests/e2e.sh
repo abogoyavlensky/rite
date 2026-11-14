@@ -673,5 +673,34 @@ assert_contains "$out" "dependency cycle" ":task cycle: load-time error"
 rm -rf "$proj" "$home"
 
 # ---------------------------------------------------------------------------
+echo "==> Scenario 13: step-level :cwd"
+proj="$(mktemp -d)"; home="$(mktemp -d)"
+mkdir -p "$proj/sub" "$proj/scripts" "$proj/nested/deeper"
+cat > "$proj/scripts/show.lg" <<'EOF'
+(println "show.lg found:" (file-exists? "show.lg"))
+EOF
+cat > "$proj/rite.edn" <<'EOF'
+{:tasks {steps {:cwd "." :do [{:sh "pwd"} {:sh "pwd" :cwd "sub"} {:sh "pwd"}]}
+         runs  {:do [{:run ["show.lg"] :cwd "scripts"} {:sh "pwd"}]}
+         over  {:cwd "sub" :do [{:sh "pwd" :cwd "scripts"} {:sh "pwd"}]}}}
+EOF
+root="$(cd "$proj" && pwd -P)"
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" steps 2>/dev/null)"
+assert_eq "$out" "$root
+$root/sub
+$root" "step :cwd: applies to its step only"
+out="$(cd "$proj/nested/deeper" && RITE_HOME="$home" "$RITE" steps 2>/dev/null)"
+assert_eq "$out" "$root
+$root/sub
+$root" "step :cwd: resolved against the project root, not the invocation dir"
+out="$(cd "$proj/nested" && RITE_HOME="$home" "$RITE" runs 2>/dev/null)"
+assert_eq "$out" "show.lg found: true
+$root/nested" "step :cwd: a :run step runs from its own :cwd, the next step from the task's"
+out="$(cd "$proj" && RITE_HOME="$home" "$RITE" over 2>/dev/null)"
+assert_eq "$out" "$root/scripts
+$root/sub" "step :cwd: replaces the task's :cwd for that step"
+rm -rf "$proj" "$home"
+
+# ---------------------------------------------------------------------------
 echo
 echo "All e2e scenarios passed ($PASS_COUNT assertions)."

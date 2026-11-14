@@ -28,7 +28,9 @@
 ;; A task's :env is set around each step's process and restored after it; its
 ;; :cwd wraps each step in `sh` with a cd (rite's own directory never changes,
 ;; and let-go's chdir is Linux-only). Neither reaches the task's :depends
-;; entries, which are separate plan entries with their own :env/:cwd.
+;; entries, which are separate plan entries with their own :env/:cwd. A :sh or
+;; :run step's own :cwd (relative to the project root) replaces the task's
+;; effective cwd for that step only.
 ;;
 ;; A {:task ...} step runs the called task's sub-plan (the entry's :calls,
 ;; built by rite.plan) in-process, as if the step ran `rite <task> args`: the
@@ -175,8 +177,12 @@
                                      {:env env
                                       :cwd cwd}
                                      verbose?)
-                     (with-env! env
-                       #(run-step! step bindings exe sp cwd verbose?)))]
+                     (let [step-cwd (if-let [c (:cwd step)]
+                                      (path/join project c)
+                                      cwd)]
+                       (with-env! env
+                         #(run-step! step bindings exe sp step-cwd
+                                     verbose?))))]
           (if (zero? exit)
             (recur (rest steps) (inc i) sp)
             (do (write! *err* (str "\n" (style/failure-line name i exit) "\n"))
