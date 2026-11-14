@@ -4,6 +4,8 @@
 
 **Goal:** Three step-level features found while writing the kopi `rite.edn`: a per-step `:cwd`, readable multi-line `:sh` steps with a compact echo and a `:fail-on-output` check, and a `:parallel` step that runs long-lived processes together with prefixed output and a shared stop.
 
+> Execution notes (2026-11-14): every `lgx` command ran as `mise exec -- lgx ...`, because the `lgx` 0.5.4 first on PATH cannot load this repo's test harness; the pinned 0.1.2 can. Before each commit `lgx fmt check` and `lgx lint` also ran, as CI's `lgx check` does. No session task-list tool was available, so this document is the only progress tracker.
+
 **Tech Stack:** let-go (`.lg`), shapelet schemas (`rite.config`), POSIX `sh` (the `:parallel` supervisor), `lgx test` for unit tests, `tests/e2e.sh` against the built `bin/rite`, GitHub Actions.
 
 ---
@@ -154,18 +156,20 @@ The script lives as one string constant in `src/rite/parallel.lg`. It is the onl
 - Modify: `src/rite/config.lg` (`step-schema`, about line 182)
 - Test: `test/rite/config_test.lg`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
   Accepted: `{:sh "npm ci" :cwd "web"}`, `{:run "x.lg" :cwd "scripts"}`. Rejected, with the error path at the step's `:cwd`: an absolute path, a `..`-escaping path (whatever `rel-path-schema` already rejects), and `{:task fmt :cwd "web"}` with the message from the Design section.
-- [ ] **Step 2: Run them to see them fail**
+- [x] **Step 2: Run them to see them fail**
   Run: `lgx test`
   Expected: the new cases FAIL.
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
   Add `[:cwd {:optional true} rel-path-schema]` to the step map. Add a step-level `:fn` check that rejects `:cwd` together with `:task`.
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
   Run: `lgx test`
   Expected: PASS.
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   `git commit -m "feat: accept :cwd on :sh and :run steps"`
+
+> Deviation: the existing "unknown key ... (allowed: ...)" assertions in `config_test.lg` were updated to list `:cwd`; Tasks 4 and 5 did the same for `:fail-on-output` and `:parallel`.
 
 ### Task 2: Step-level `:cwd` at run time
 
@@ -173,15 +177,17 @@ The script lives as one string constant in `src/rite/parallel.lg`. It is the onl
 - Modify: `src/rite/tasks.lg` (`run-steps!`)
 - Test: `tests/e2e.sh`
 
-- [ ] **Step 1: Write the e2e scenario**
+- [x] **Step 1: Write the e2e scenario**
   A project with `sub/` and a task `{:cwd "." :do [{:sh "pwd"} {:sh "pwd" :cwd "sub"} {:sh "pwd"}]}`. Assert the three lines are root, `root/sub`, root. Run it from a nested directory too, to prove the path resolves against the project root, not the invocation dir. Add the same check for a `:run` step with `:cwd`.
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
   In `run-steps!`, compute `step-cwd` as `(path/join project (:cwd step))` when the step has `:cwd`, else the task's `cwd`, and pass it to `run-step!`. Update the namespace comment that says `:cwd` is task-level.
-- [ ] **Step 3: Run the suite**
+- [x] **Step 3: Run the suite**
   Run: `bash tests/run.sh`
   Expected: PASS.
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
   `git commit -m "feat: run a step from its own :cwd"`
+
+> Deviation: the e2e expects the `:run` step's next step (no task `:cwd`) to run from the invocation directory, not the root. That is existing behaviour for a task without `:cwd`.
 
 ### Task 3: Compact echo for multi-line commands
 
@@ -189,19 +195,21 @@ The script lives as one string constant in `src/rite/parallel.lg`. It is the onl
 - Modify: `src/rite/tasks.lg`
 - Test: `test/rite/tasks_test.lg`, `tests/e2e.sh`
 
-- [ ] **Step 1: Write the failing unit tests**
+- [x] **Step 1: Write the failing unit tests**
   `(display-command cmd)`:
   - `"echo hi"` stays `"echo hi"`;
   - `"\n  echo one\n\nif x; then y; fi\necho three\n"` becomes `"echo one … (+2 lines)"`, with the first line trimmed and blank lines ignored;
   - a two-line command gives `(+1 lines)`.
-- [ ] **Step 2: Implement `display-command`**
+- [x] **Step 2: Implement `display-command`**
   Use it in `run-sh-step!` for the `$` line only. The `--verbose` `+ sh -c` line keeps the full command.
-- [ ] **Step 3: Add an e2e assertion**
+- [x] **Step 3: Add an e2e assertion**
   A multi-line step echoes the compact form, and `--verbose` still shows every line.
-- [ ] **Step 4: Run the suite and commit**
+- [x] **Step 4: Run the suite and commit**
   Run: `bash tests/run.sh`
   Expected: PASS.
   `git commit -m "feat: echo multi-line steps as their first line"`
+
+> Deviation: `display-command` also trims a lone line padded with newlines (`"\n  echo hi\n"` echoes `echo hi`), so a one-line script written on its own lines does not echo blank lines.
 
 ### Task 4: `:fail-on-output`
 
@@ -209,19 +217,19 @@ The script lives as one string constant in `src/rite/parallel.lg`. It is the onl
 - Modify: `src/rite/config.lg`, `src/rite/tasks.lg`, `src/rite/style.lg`
 - Test: `test/rite/config_test.lg`, `tests/e2e.sh`
 
-- [ ] **Step 1: Schema tests, then the schema**
+- [x] **Step 1: Schema tests, then the schema**
   - Accepted: `{:sh "x" :fail-on-output true}` and `false`.
   - Rejected: a non-boolean value; `:fail-on-output` on a `:run` or `:task` step.
 
   Run `lgx test` to see the cases fail, implement, then run it again to see them pass.
-- [ ] **Step 2: Implement the runner**
+- [x] **Step 2: Implement the runner**
   Add `run-checked-sh-step!` in `tasks.lg`, following the five numbered behaviours in Design, Part B. Build the command exactly as `run-sh-step!` does (`with-cwd` included) and run it with `(os/sh "sh" "-c" full)` inside the same `with-env!`. Add `style/output-failure-line` for the `=> step printed output; expected none` line.
-- [ ] **Step 3: E2E scenarios**
+- [x] **Step 3: E2E scenarios**
   - `printf ''` passes;
   - `echo stale` fails with exit 1, and the output contains `stale`, the output-failure line and the task failure line;
   - `exit 4` fails with exit 4;
   - `echo warn >&2` passes.
-- [ ] **Step 4: Run the suite and commit**
+- [x] **Step 4: Run the suite and commit**
   Run: `bash tests/run.sh`
   Expected: PASS.
   `git commit -m "feat: add :fail-on-output for check steps"`
@@ -232,7 +240,7 @@ The script lives as one string constant in `src/rite/parallel.lg`. It is the onl
 - Modify: `src/rite/config.lg` (`step-schema`, `exactly-one-action-errors`, `step-ref-errors`, `task-steps`, `depends-refs-errors`)
 - Test: `test/rite/config_test.lg`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
   - Accepted: `{:parallel [{:sh "a"} {:task fmt} {:sh "b" :cwd "web" :label "web"}]}`.
   - Rejected, each with a precise path:
     - an empty vector;
@@ -248,18 +256,20 @@ The script lives as one string constant in `src/rite/parallel.lg`. It is the onl
     - a `:task` child with an undeclared `:arg/x`;
     - an `:sh` child with an undeclared `{{arg/x}}`.
   - Cycles: `a {:do {:parallel [{:task a}]}}` reports `dependency cycle: a -> a`, and a two-task cycle through a `:parallel` child is caught too. Cover both `:do` forms, the single step map and the vector of steps, for cycles and for `:task`-child reference errors.
-- [ ] **Step 2: Run them to see them fail**
+- [x] **Step 2: Run them to see them fail**
   Run: `lgx test`
   Expected: FAIL.
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
   - Add `:parallel` to the action keys in `exactly-one-action-errors`.
   - Add a closed child schema (`:sh`, `:task`, `:cwd` for `:sh` only, `:label`), where each child needs exactly one of `:sh` or `:task`.
   - Run `step-ref-errors` over `:sh` children.
   - Extend `task-steps` to yield `[child [:do i :parallel j]]` for `:task` children, so `depends-refs-errors` and the cycle graph both see them.
-- [ ] **Step 4: Run the tests and commit**
+- [x] **Step 4: Run the tests and commit**
   Run: `lgx test`
   Expected: PASS.
   `git commit -m "feat: validate :parallel steps"`
+
+> Deviation: `exactly-one-action-errors` now says "must contain exactly one of :sh, :run, :task, :parallel"; existing tests were updated. A bad child gets its own messages ("`:run is not allowed in :parallel; use :sh or :task`", "`:parallel steps cannot be nested`"), and `:cwd` on a `:task` child is rejected like on a `:task` step.
 
 ### Task 6: Pure helpers in `rite.parallel`
 
@@ -267,15 +277,15 @@ The script lives as one string constant in `src/rite/parallel.lg`. It is the onl
 - Create: `src/rite/parallel.lg`
 - Test: `test/rite/parallel_test.lg`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
   The helpers take already-expanded children:
   - `(labels children)`: explicit labels win and are reserved first; a `:task` child uses its task name; an `:sh` child uses its command's first word; duplicates take the first free suffix, so `[go go go-2(explicit)]` gives `go`, `go-3`, `go-2`.
   - `(prefixes labels color?)`: `[api] ` and `[web] ` padded to equal width; purple escape codes only when `color?` is true.
   - `(task-child-command project exe task-name arg-strings)` gives `cd '<project>' && exec '<exe>' '<task>' '<arg>'`, each part quoted with `args/shell-quote`.
   - `(supervisor-argv children-with-labels)` gives `["sh" "-c" supervisor-script "sh" "<prefix1>" "<cmd1>" ...]`.
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
   Write the four helpers and the `supervisor-script` constant, following the Design's supervisor bullets, with the comment block. The script takes pairs of (prefix, command) from `"$@"`.
-- [ ] **Step 3: Exercise the script directly**
+- [x] **Step 3: Exercise the script directly**
   Before wiring it in, run the constant against dash and bash from a throwaway harness. Check six cases:
   - two children;
   - one failing child with a `sleep 30` sibling;
@@ -286,10 +296,14 @@ The script lives as one string constant in `src/rite/parallel.lg`. It is the onl
   - SIGTERM to the parent.
 
   Expect the prefixed output, the exit codes 3, 2, 130 and 143, KILL after the bound, and no leftover `sleep 3[0]`.
-- [ ] **Step 4: Run the unit tests and commit**
+- [x] **Step 4: Run the unit tests and commit**
   Run: `lgx test`
   Expected: PASS.
   `git commit -m "feat: add the :parallel supervisor and helpers"`
+
+> Deviation: the supervisor's argv is `sh -c <script> sh <stop-open> <stop-close>` followed by a (prefix, label, command) triple per child, not (prefix, command) pairs. The supervisor needs the bare label and the colour codes to print the stop line itself. `supervisor-argv` therefore takes `[{:prefix :label :command}]` and `color?`.
+> Deviation: the watchdog compares `ps -o ppid= -p $$` with the original `$PPID` instead of `kill -0 "$PPID"`, because a dead but unreaped parent still answers `kill -0`. Prefixes reach awk through `ENVIRON`, not `-v`, so backslashes in a label stay literal. On exit the supervisor gives the prefixers up to 2 seconds to drain (polling every 0.1 s) before it exits.
+> Deviation: the throwaway harness ran under dash, bash and `bash --posix`. Every case passed: exit codes 3, 2, 130 and 143; KILL after the 5-second bound for a TERM-ignoring child and grandchild; no leftover `sleep 3x`; the watchdog also fired for a parent killed and never reaped. The SIGINT case has to signal the job's process group under `set -m`. A background job without job control starts with INT ignored, and a non-interactive sh cannot trap a signal that was ignored on entry.
 
 ### Task 7: Run `:parallel` steps
 

@@ -1,0 +1,91 @@
+;; Unit tests for rite.parallel — the pure helpers behind :parallel steps. The
+;; supervisor script itself is exercised by the e2e.
+;; Run with: lgx test  (from project root)
+
+(ns rite.parallel-test
+  (:require [clojure.test :refer [deftest is]]
+            [rite.parallel :as parallel]
+            [string :as str]))
+
+;; ---------------------------------------------------------------------------
+;; labels
+;; ---------------------------------------------------------------------------
+
+(deftest labels-default-to-task-name-and-first-word
+  (is (= ["dev-api" "npm"]
+         (parallel/labels [{:task 'dev-api}
+                           {:sh "npm run dev -- --port 5173"}]))))
+
+(deftest labels-first-word-skips-leading-whitespace
+  (is (= ["go"] (parallel/labels [{:sh "\n  go run ./cmd/kopi\n"}]))))
+
+(deftest labels-explicit-win
+  (is (= ["web" "api"]
+         (parallel/labels [{:sh "npm run dev"
+                            :label "web"}
+                           {:task 'dev-api
+                            :label "api"}]))))
+
+(deftest labels-dedupe-with-first-free-suffix
+  ;; Explicit labels are reserved first, so the second default go skips go-2.
+  (is (= ["go" "go-3" "go-2"]
+         (parallel/labels [{:sh "go run ./a"}
+                           {:sh "go run ./b"}
+                           {:sh "make"
+                            :label "go-2"}]))))
+
+(deftest labels-default-yields-to-explicit
+  (is (= ["go-2" "go"]
+         (parallel/labels [{:sh "go run ./a"}
+                           {:sh "make"
+                            :label "go"}]))))
+
+;; ---------------------------------------------------------------------------
+;; prefixes
+;; ---------------------------------------------------------------------------
+
+(deftest prefixes-pad-to-equal-width
+  (is (= ["[api] " "[web] "] (parallel/prefixes ["api" "web"] false)))
+  (is (= ["[go]    " "[vite]  " "[api-2] "]
+         (parallel/prefixes ["go" "vite" "api-2"] false))))
+
+(deftest prefixes-colour-only-when-asked
+  (let [[p] (parallel/prefixes ["api" "web-ui"] true)]
+    (is (str/includes? p "\u001b[38;5;98m[api]\u001b[0m"))
+    (is (str/ends-with? p "]\u001b[0m    "))))
+
+;; ---------------------------------------------------------------------------
+;; task-child-command
+;; ---------------------------------------------------------------------------
+
+(deftest task-child-command-quotes-every-part
+  (is (= "cd '/p/my proj' && exec '/usr/bin/rite' 'dev-api' 'prod' 'it'\\''s'"
+         (parallel/task-child-command "/p/my proj" "/usr/bin/rite" 'dev-api
+                                      ["prod" "it's"]))))
+
+(deftest task-child-command-without-args
+  (is (= "cd '/p' && exec 'rite' 'fmt'"
+         (parallel/task-child-command "/p" "rite" 'fmt []))))
+
+;; ---------------------------------------------------------------------------
+;; supervisor-argv
+;; ---------------------------------------------------------------------------
+
+(deftest supervisor-argv-passes-data-as-positional-params
+  (is (= ["sh" "-c" parallel/supervisor-script "sh" "" ""
+          "[a] " "a" "echo a"
+          "[b] " "b" "echo b"]
+         (parallel/supervisor-argv [{:prefix "[a] "
+                                     :label "a"
+                                     :command "echo a"}
+                                    {:prefix "[b] "
+                                     :label "b"
+                                     :command "echo b"}]
+                                   false))))
+
+(deftest supervisor-argv-colours-the-stop-line
+  (let [argv (parallel/supervisor-argv [{:prefix "[a] "
+                                         :label "a"
+                                         :command "true"}]
+                                       true)]
+    (is (= ["\u001b[38;5;98m" "\u001b[0m"] (subvec argv 4 6)))))

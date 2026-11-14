@@ -1,0 +1,310 @@
+(ns rite.parallel
+  (:require [rite.args :as args]
+            [rite.style :as style]
+            [string :as str]))
+
+;; --------------------------------------------------------------------------
+;; :parallel steps
+;;
+;; {:parallel [child ...]} runs its children at the same time: each is
+;; {:sh cmd} (optional :cwd, :label) or {:task entry} (optional :label). Every
+;; output line is prefixed with the child's [label]. The first child to exit
+;; non-zero stops the others; a child that exits 0 stops nothing. Ctrl-C
+;; (SIGINT) and SIGTERM stop every child.
+;;
+;; rite does not supervise the children itself: let-go's process-group,
+;; kill and signal APIs exist only on Linux, and rite ships to macOS. A
+;; :parallel step instead runs one fixed POSIX `sh` script, supervisor-script,
+;; through os/exec* (streaming, like any step), with its data as positional
+;; parameters, never spliced into the script text:
+;;
+;;   sh -c <script> sh <stop-open> <stop-close> <prefix1> <label1> <cmd1> ...
+;;
+;; <stop-open>/<stop-close> are the colour codes around the supervisor's own
+;; `=> <label> exited with <code>; stopping the others` line ("" without
+;; colour). A :task child's command re-runs rite as a subprocess
+;; (task-child-command), since in-process sub-plans can only run one after
+;; another.
+;;
+;; How the script works:
+;;
+;; - Events. Children report `start <i>` and `exit <i> <code>` lines on a
+;;   FIFO in a mktemp -d dir. The supervisor holds it open read-write on fd 3,
+;;   so a read never sees EOF and a write never blocks.
+;; - Children. Each child is a background job:
+;;     { sh -c "$cmd" & record its PID; start; wait; exit } 2>&1 | awk prefix &
+;;   The PID file records the real command, not awk. awk with fflush() is the
+;;   portable line-buffered prefixer (sed -u is GNU-only); the prefix arrives
+;;   through ENVIRON, since awk -v would interpret backslashes in it. Children
+;;   get no stdin (/dev/null) and no fd 3.
+;; - Startup barrier. Before handling any exit, the supervisor waits for all
+;;   N start events. A child's start follows its PID file, so once the
+;;   barrier passes every PID is recorded and a stop cannot miss a sibling.
+;;   Exits that arrive during the barrier are buffered, then handled in order.
+;; - Reading. Each event is read in a background subshell that the supervisor
+;;   waits on: a trapped signal interrupts wait at once, while it would be
+;;   deferred until a blocked read returns. An interrupted wait waits on the
+;;   same reader again, since a second reader could take the next event.
+;; - Traps. INT and TERM call one handler with 130 or 143. During the barrier
+;;   it only records the code, and the stop runs once the barrier completes;
+;;   after the barrier it stops at once. While stopping, signals are ignored.
+;; - Stop. Snapshot every recorded PID's descendants (a pgrep -P walk, or
+;;   just the PIDs without pgrep), TERM them leaves first, wait up to 5
+;;   seconds polling kill -0, then KILL what is left of the snapshot. The
+;;   snapshot still holds a TERM-ignoring grandchild whose parent died and
+;;   left it re-parented to init, where a fresh walk could not find it. set -m
+;;   is not used: dash cannot enable job control without a tty.
+;; - Watchdog. A background loop compares the supervisor's parent PID with
+;;   the original one each second; when rite is gone it TERMs the supervisor,
+;;   which stops the children. (kill -0 $PPID would keep succeeding while the
+;;   dead parent waits to be reaped.)
+;; - Exit. Stop the reader and watchdog, remove the temp dir, give the
+;;   prefixers up to 2 seconds to drain, then exit with the first failing
+;;   code, or 0. wait runs with 2>/dev/null, which hides sh's `Terminated`
+;;   notices for stopped children.
+;;
+;; A process that leaves its tree (daemonizes, calls setsid) cannot be
+;; stopped this way; see docs/backlog/parallel-process-groups.md.
+;; --------------------------------------------------------------------------
+
+(def supervisor-script
+  "The :parallel supervisor; see the namespace comment. Takes
+   <stop-open> <stop-close>, then one (prefix, label, command) triple per
+   child, from \"$@\"."
+  "# Args: <stop-open> <stop-close> then one (prefix, label, command) triple per
+# child. Never spliced into this text, so no quoting is needed.
+open=$1 close=$2
+shift 2
+n=$(($# / 3))
+dir=$(mktemp -d) || exit 1
+fifo=\"$dir/events\"
+mkfifo \"$fifo\" || { rm -rf \"$dir\"; exit 1; }
+exec 3<>\"$fifo\"
+
+phase=barrier
+pending=
+reader=
+watchdog=
+apids=
+
+# Every PID in the process tree under $1, children before their parent.
+tree() {
+  if [ -n \"$has_pgrep\" ]; then
+    for _c in $(pgrep -P \"$1\" 2>/dev/null); do tree \"$_c\"; done
+  fi
+  echo \"$1\"
+}
+command -v pgrep >/dev/null 2>&1 && has_pgrep=1 || has_pgrep=
+
+# Snapshot every child's tree first, then TERM each PID in it, leaves first.
+term_all() {
+  snap=
+  for _f in \"$dir\"/*.pid; do
+    [ -f \"$_f\" ] || continue
+    snap=\"$snap $(tree \"$(cat \"$_f\")\")\"
+  done
+  for _p in $snap; do kill -TERM \"$_p\" 2>/dev/null; done
+}
+
+# Wait up to 5 seconds for the snapshot to die, then KILL what is left.
+reap_all() {
+  _t=0
+  while [ \"$_t\" -lt 5 ]; do
+    _alive=
+    for _p in $snap; do
+      if kill -0 \"$_p\" 2>/dev/null; then _alive=1; break; fi
+    done
+    [ -z \"$_alive\" ] && return
+    sleep 1
+    _t=$((_t + 1))
+  done
+  for _p in $snap; do kill -KILL \"$_p\" 2>/dev/null; done
+}
+
+cleanup() {
+  kill $watchdog $reader 2>/dev/null
+  rm -rf \"$dir\"
+  # Let the prefixers drain the last lines, but never hang on a process that
+  # escaped the tree and still holds a pipe open.
+  _t=0
+  while [ \"$_t\" -lt 20 ]; do
+    _alive=
+    for _p in $apids; do
+      if kill -0 \"$_p\" 2>/dev/null; then _alive=1; break; fi
+    done
+    [ -z \"$_alive\" ] && break
+    sleep 0.1
+    _t=$((_t + 1))
+  done
+  exec 3>&-
+}
+
+finish() {
+  phase=done
+  cleanup
+  exit \"$1\"
+}
+
+on_signal() {
+  case $phase in
+    barrier) pending=$1 ;;
+    run) phase=stopping; term_all; reap_all; finish \"$1\" ;;
+  esac
+}
+trap 'on_signal 130' INT
+trap 'on_signal 143' TERM
+
+i=0
+while [ $# -gt 0 ]; do
+  i=$((i + 1))
+  eval \"label_$i=\\$2\"
+  {
+    sh -c \"$3\" 3>&- </dev/null &
+    c=$!
+    echo \"$c\" > \"$dir/$i.pid\"
+    echo \"start $i\" >&3
+    wait \"$c\" 2>/dev/null
+    echo \"exit $i $?\" >&3
+  } 2>&1 | P=$1 awk '{ print ENVIRON[\"P\"] $0; fflush() }' &
+  apids=\"$apids $!\"
+  shift 3
+done
+
+# The parent watchdog: when rite goes away, stop the children.
+ppid=$PPID
+(
+  while [ \"$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ')\" = \"$ppid\" ]; do
+    sleep 1
+  done
+  kill -TERM $$ 2>/dev/null
+) &
+watchdog=$!
+
+# Read one event line into $ev. The read runs in a background subshell and
+# the supervisor waits on it, because a trapped signal interrupts wait at
+# once but is deferred while read blocks. An interrupted wait waits on the
+# same reader again; a second reader could take the next event.
+next_event() {
+  rm -f \"$dir/ev\"
+  ( IFS= read -r _l <&3 && printf '%s\\n' \"$_l\" > \"$dir/ev.tmp\" &&
+      mv \"$dir/ev.tmp\" \"$dir/ev\" ) &
+  reader=$!
+  while [ ! -f \"$dir/ev\" ]; do
+    wait \"$reader\" 2>/dev/null
+    if [ ! -f \"$dir/ev\" ] && ! kill -0 \"$reader\" 2>/dev/null; then
+      return 1
+    fi
+  done
+  reader=
+  IFS= read -r ev < \"$dir/ev\"
+}
+
+# Startup barrier: no stop until every child has recorded its PID.
+started=0
+buffered=
+while [ \"$started\" -lt \"$n\" ]; do
+  next_event || finish 1
+  case $ev in
+    start*) started=$((started + 1)) ;;
+    exit*) set -- $ev; buffered=\"$buffered $2:$3\" ;;
+  esac
+done
+
+phase=run
+if [ -n \"$pending\" ]; then
+  phase=stopping; term_all; reap_all; finish \"$pending\"
+fi
+
+remaining=$n
+handle_exit() {
+  remaining=$((remaining - 1))
+  if [ \"$2\" -ne 0 ]; then
+    phase=stopping
+    term_all
+    eval \"_l=\\$label_$1\"
+    printf '\\n%s=> %s exited with %s; stopping the others%s\\n' \\
+      \"$open\" \"$_l\" \"$2\" \"$close\" >&2
+    reap_all
+    finish \"$2\"
+  fi
+  [ \"$remaining\" -eq 0 ] && finish 0
+}
+
+for ev in $buffered; do handle_exit \"${ev%%:*}\" \"${ev#*:}\"; done
+while :; do
+  next_event || finish 1
+  case $ev in
+    exit*) set -- $ev; handle_exit \"$2\" \"$3\" ;;
+  esac
+done
+")
+
+(defn- first-word
+  "The first whitespace-separated word of `cmd`, or \"sh\" for a command
+   with none."
+  [cmd]
+  (or (re-find #"\S+" cmd) "sh"))
+
+(defn- default-label [child]
+  (if (contains? child :task)
+    (str (:task child))
+    (first-word (:sh child))))
+
+(defn- free-label
+  "`base` if not in `taken`, else the first of base-2, base-3, ... that is."
+  [base taken]
+  (if-not (contains? taken base)
+    base
+    (loop [k 2]
+      (let [candidate (str base "-" k)]
+        (if (contains? taken candidate)
+          (recur (inc k))
+          candidate)))))
+
+(defn labels
+  "One label per child, in order. `children` are already expanded: {:sh cmd}
+   with cmd the final command string before any cd wrapper, or {:task name},
+   either with an optional :label. Explicit labels win and are reserved
+   first. A :task child defaults to its task name, an :sh child to its
+   command's first word; a default already taken gets the first free -2, -3,
+   ... suffix."
+  [children]
+  (let [explicit (set (keep :label children))]
+    (loop [cs children
+           taken explicit
+           acc []]
+      (if (empty? cs)
+        acc
+        (let [c (first cs)]
+          (if-let [l (:label c)]
+            (recur (rest cs) taken (conj acc l))
+            (let [l (free-label (default-label c) taken)]
+              (recur (rest cs) (conj taken l) (conj acc l)))))))))
+
+(defn prefixes
+  "The output prefix for each of `labels`: `[label] `, padded with spaces
+   after the bracket so every prefix has the same width. The [label] part is
+   purple when `color?` is true."
+  [labels color?]
+  (let [width (apply max (map count labels))]
+    (mapv (fn [l]
+            (str (style/label (str "[" l "]") color?)
+                 (apply str (repeat (- width (count l)) " "))
+                 " "))
+          labels)))
+
+(defn task-child-command
+  "The shell command for a :task child: re-run rite (`exe`) from `project`
+   with the task name and its resolved arg strings, each part shell-quoted."
+  [project exe task-name arg-strings]
+  (str "cd " (args/shell-quote project) " && exec "
+       (str/join " " (map args/shell-quote
+                          (concat [exe (str task-name)] arg-strings)))))
+
+(defn supervisor-argv
+  "The argv that runs supervisor-script over `entries`, each
+   {:prefix :label :command}. `color?` picks the stop line's colour codes."
+  [entries color?]
+  (let [[open close] (style/purple-codes color?)]
+    (vec (concat ["sh" "-c" supervisor-script "sh" open close]
+                 (mapcat (juxt :prefix :label :command) entries)))))
